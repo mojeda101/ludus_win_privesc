@@ -1,0 +1,78 @@
+---
+# Leaked Credentials in Git Repository Lab Setup
+# Installs git via Chocolatey, creates a repo with credentials committed
+# then "removed", leaving them discoverable in git history.
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/LeakedCredentialsGitHubRepository.md
+
+- name: Install git via Chocolatey
+  chocolatey.chocolatey.win_chocolatey:
+    name: git
+    state: present
+
+- name: Create fake project directory
+  ansible.windows.win_file:
+    path: "C:\\DevProjects\\WebApp"
+    state: directory
+
+- name: Initialize git repo and commit credentials
+  ansible.windows.win_shell: |
+    $env:PATH += ";C:\Program Files\Git\cmd;C:\Program Files\Git\bin"
+    Set-Location "C:\DevProjects\WebApp"
+
+    git init
+    git config user.email "dev@company.local"
+    git config user.name "Developer"
+
+    # Create a config file with credentials
+    @"
+    [database]
+    host=db.company.local
+    port=1433
+    username=sa
+    password={{ ludus_win_privesc_admin_password }}
+
+    [admin]
+    username={{ ludus_win_privesc_admin_user }}
+    password={{ ludus_win_privesc_admin_password }}
+    "@ | Out-File -FilePath "C:\DevProjects\WebApp\config.ini" -Encoding utf8
+
+    # Create a .env file
+    @"
+    DB_HOST=db.company.local
+    DB_USER=sa
+    DB_PASS={{ ludus_win_privesc_admin_password }}
+    ADMIN_USER={{ ludus_win_privesc_admin_user }}
+    ADMIN_PASS={{ ludus_win_privesc_admin_password }}
+    "@ | Out-File -FilePath "C:\DevProjects\WebApp\.env" -Encoding utf8
+
+    git add .
+    git commit -m "Initial project setup"
+
+    # "Remove" credentials (but they remain in git history)
+    @"
+    [database]
+    host=db.company.local
+    port=1433
+    username=sa
+    password=REDACTED
+
+    [admin]
+    username={{ ludus_win_privesc_admin_user }}
+    password=REDACTED
+    "@ | Out-File -FilePath "C:\DevProjects\WebApp\config.ini" -Encoding utf8
+
+    Remove-Item "C:\DevProjects\WebApp\.env" -Force
+
+    git add .
+    git commit -m "Remove sensitive data"
+
+- name: Print Leaked Git Credentials scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== Leaked Credentials in Git Repository Scenario ==="
+      - "Repo: C:\\DevProjects\\WebApp"
+      - "Enumerate: cd C:\\DevProjects\\WebApp"
+      - "           git log --oneline"
+      - "           git show HEAD~1:config.ini"
+      - "           git log -p --all | findstr /i password"

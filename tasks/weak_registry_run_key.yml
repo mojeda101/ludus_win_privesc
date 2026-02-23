@@ -1,0 +1,48 @@
+---
+# Logon Autostart Execution (Registry Run Keys) Lab Setup
+# Creates a Run key entry and makes the registry key world-writable.
+# An attacker can modify the entry to point to a malicious binary.
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/LogonAutostartExecutionRegistryRunKeys.md
+
+- name: Create a Run key entry in HKLM
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run
+    name: "LegacyStartup"
+    data: "C:\\Program Files\\LegacyApp\\startup.exe"
+    type: String
+    state: present
+
+- name: Create placeholder binary for Run key
+  ansible.windows.win_file:
+    path: "C:\\Program Files\\LegacyApp"
+    state: directory
+
+- name: Copy placeholder binary for Run key (skip if already exists)
+  ansible.windows.win_shell: |
+    $dest = "C:\Program Files\LegacyApp\startup.exe"
+    if (-not (Test-Path $dest)) {
+      Copy-Item "C:\Windows\System32\cmd.exe" $dest -Force
+    }
+
+- name: Grant Everyone write access on HKLM Run key
+  ansible.windows.win_shell: |
+    $acl = Get-Acl "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+    $rule = New-Object System.Security.AccessControl.RegistryAccessRule(
+      "Everyone",
+      "FullControl",
+      "ContainerInherit,ObjectInherit",
+      "None",
+      "Allow"
+    )
+    $acl.AddAccessRule($rule)
+    Set-Acl "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" $acl
+
+- name: Print Registry Run Key scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== Logon Autostart Execution (Registry Run Keys) Scenario ==="
+      - "Key: HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run (Everyone:F)"
+      - "Enumerate: Get-Acl 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run' | Format-List"
+      - "Exploit: Modify 'LegacyStartup' value to point to malicious binary"
+      - "         reg add HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run /v LegacyStartup /t REG_SZ /d C:\\evil.exe /f"

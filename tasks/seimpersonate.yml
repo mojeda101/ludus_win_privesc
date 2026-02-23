@@ -1,0 +1,95 @@
+---
+# SeImpersonatePrivilege Lab Setup
+# Grants SeImpersonatePrivilege to the victim user and optionally sets up IIS
+# with a web shell (cmdasp.aspx) so the user can obtain a network service shell
+# and then use tools like PrintSpoofer or GodPotato to escalate to SYSTEM.
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/SeImpersonatePrivilege.md
+
+- name: Install Carbon module for privilege assignment
+  ansible.windows.win_shell: |
+    if (-not (Get-Module -ListAvailable -Name Carbon)) {
+      Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null
+      Install-Module -Name Carbon -Force -Scope CurrentUser -AllowClobber
+    }
+  ignore_errors: true
+
+- name: Grant SeImpersonatePrivilege to victim user
+  ansible.windows.win_shell: |
+    $cfgFile = "$env:TEMP\seimpersonate_cfg.ini"
+    $dbFile  = "$env:TEMP\seimpersonate_db.sdb"
+
+    if ("{{ ludus_win_privesc_victim_user_type }}" -eq "domain") {
+      $sidEntry = (New-Object System.Security.Principal.NTAccount("{{ ludus_win_privesc_domain | default('') }}\{{ ludus_win_privesc_victim_user }}")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+    } else {
+      $sidEntry = (Get-LocalUser -Name "{{ ludus_win_privesc_victim_user }}").SID.Value
+    }
+
+    & secedit /export /cfg $cfgFile | Out-Null
+    $content = Get-Content $cfgFile
+    $newLine  = "SeImpersonatePrivilege = *$sidEntry"
+    if ($content -match 'SeImpersonatePrivilege') {
+      $content = $content -replace 'SeImpersonatePrivilege\s*=.*', $newLine
+    } else {
+      $privIdx = ($content | Select-String '\[Privilege Rights\]').LineNumber
+      $content = $content[0..($privIdx - 1)] + $newLine + $content[$privIdx..($content.Length - 1)]
+    }
+    $content | Set-Content $cfgFile
+    & secedit /import /cfg $cfgFile /db $dbFile /overwrite /quiet | Out-Null
+    & secedit /configure /db $dbFile /quiet | Out-Null
+    Remove-Item $cfgFile, $dbFile -ErrorAction SilentlyContinue
+
+- name: Install IIS for SeImpersonate web shell scenario
+  ansible.windows.win_shell: |
+    # Use ServerManager on Server editions, DISM on desktop editions
+    $osCaption = (Get-WmiObject Win32_OperatingSystem).Caption
+    if ($osCaption -match "Server") {
+      Import-Module ServerManager
+      Install-WindowsFeature -Name Web-Server, Web-ASP, Web-ASPX -IncludeManagementTools
+    } else {
+      # Windows 10/11 - use DISM
+      $features = @(
+        "IIS-WebServerRole",
+        "IIS-WebServer",
+        "IIS-CommonHttpFeatures",
+        "IIS-StaticContent",
+        "IIS-DefaultDocument",
+        "IIS-ApplicationDevelopment",
+        "IIS-ASPNET45",
+        "IIS-NetFxExtensibility45",
+        "IIS-ISAPIExtensions",
+        "IIS-ISAPIFilter",
+        "NetFx4-AdvSrvs",
+        "NetFx4Extended-ASPNET45"
+      )
+      foreach ($feature in $features) {
+        Enable-WindowsOptionalFeature -Online -FeatureName $feature -All -NoRestart -ErrorAction SilentlyContinue
+      }
+    }
+  ignore_errors: true
+
+- name: Download cmdasp.aspx web shell
+  ansible.windows.win_get_url:
+    url: "https://raw.githubusercontent.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/master/Lab-Setup-Source-Code/cmdasp.aspx"
+    dest: "C:\\inetpub\\wwwroot\\cmdasp.aspx"
+    force: false
+
+- name: Download index.html placeholder
+  ansible.windows.win_get_url:
+    url: "https://raw.githubusercontent.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/master/Lab-Setup-Source-Code/index.html"
+    dest: "C:\\inetpub\\wwwroot\\index.html"
+    force: true
+
+- name: Ensure IIS is running
+  ansible.windows.win_service:
+    name: W3SVC
+    state: started
+    start_mode: auto
+
+- name: Print SeImpersonate scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== SeImpersonatePrivilege Scenario ==="
+      - "User '{{ ludus_win_privesc_victim_user }}' has SeImpersonatePrivilege."
+      - "IIS web shell: http://<TARGET_IP>/cmdasp.aspx"
+      - "Exploit with: PrintSpoofer64.exe -i -c cmd, or GodPotato, or SweetPotato"

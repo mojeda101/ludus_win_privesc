@@ -1,0 +1,27 @@
+---
+# Stored Credentials (Winlogon AutoLogon) Lab Setup
+# Writes plaintext credentials into the Winlogon registry keys.
+# The victim can enumerate these with reg query or cmdkey.
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/StoredCredentialsRunas.md
+
+- name: Write AutoLogon credentials to Winlogon registry
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon
+    name: "{{ item.name }}"
+    data: "{{ item.data }}"
+    type: String
+    state: present
+  loop:
+    - { name: "DefaultUserName",   data: "{{ ludus_win_privesc_admin_user }}" }
+    - { name: "DefaultPassword",   data: "{{ ludus_win_privesc_admin_password }}" }
+    - { name: "DefaultDomainName", data: "." }
+    - { name: "AutoAdminLogon",    data: "1" }
+
+- name: Print Stored Credentials Winlogon scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== Stored Credentials (Winlogon AutoLogon) Scenario ==="
+      - "Enumerate: reg query 'HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon'"
+      - "Or: Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon'"
+      - "Use runas /savecred or pass credentials directly"

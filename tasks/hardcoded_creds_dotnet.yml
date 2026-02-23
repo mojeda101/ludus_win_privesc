@@ -1,0 +1,46 @@
+---
+# Hardcoded Credentials (.NET App) Lab Setup
+# Drops a pre-compiled vulnerable .NET service executable that contains
+# hardcoded Administrator credentials in plaintext.
+# The victim can discover credentials via dnSpy / strings / Reflector.
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/LeakedCredentialsHardcodedCredentials.md
+
+- name: Create directory for hardcoded creds service
+  ansible.windows.win_file:
+    path: "C:\\Program Files\\CustomDotNetApp"
+    state: directory
+
+- name: Download vulnerable .NET service binary
+  ansible.windows.win_get_url:
+    url: "https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/raw/master/Lab-Setup-Binary/CustomDotNetApp.exe"
+    dest: "C:\\Program Files\\CustomDotNetApp\\CustomDotNetApp.exe"
+    force: false
+
+- name: Create Custom Dot Net Service
+  ansible.windows.win_shell: |
+    $svcName = "CustomDotNetSvc"
+    if (Get-Service -Name $svcName -ErrorAction SilentlyContinue) {
+      Stop-Service $svcName -Force -ErrorAction SilentlyContinue
+      & sc.exe delete $svcName | Out-Null
+      Start-Sleep -Seconds 2
+    }
+    & sc.exe create $svcName `
+      binPath= '"C:\Program Files\CustomDotNetApp\CustomDotNetApp.exe"' `
+      DisplayName= "Custom Dot Net Service" `
+      start= auto | Out-Null
+
+- name: Start Custom Dot Net Service
+  ansible.windows.win_service:
+    name: CustomDotNetSvc
+    state: started
+    start_mode: auto
+  ignore_errors: true
+
+- name: Print Hardcoded Credentials scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== Hardcoded Credentials (.NET) Scenario ==="
+      - "Service binary: C:\\Program Files\\CustomDotNetApp\\CustomDotNetApp.exe"
+      - "Download to attacker, open in dnSpy or 'strings' to extract credentials"
+      - "Look for hardcoded Administrator password in the source strings"

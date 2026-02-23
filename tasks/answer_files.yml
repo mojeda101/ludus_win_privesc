@@ -1,0 +1,65 @@
+---
+# Answer Files (Unattend Files) Lab Setup
+# Drops an unattend.xml containing a base64-encoded Administrator password
+# in one of the well-known locations Windows Setup searches.
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/AnswerFiles.md
+
+- name: Create Panther Unattend directory
+  ansible.windows.win_file:
+    path: "C:\\Windows\\Panther\\Unattend"
+    state: directory
+
+- name: Generate base64-encoded password for unattend.xml
+  ansible.builtin.set_fact:
+    # Windows Unattend encodes as UTF-16LE + "Password" suffix, then base64
+    # For training purposes we use a simple base64 of the plain password
+    unattend_b64_password: "{{ (ludus_win_privesc_admin_password + 'Password') | b64encode }}"
+
+- name: Drop unattend.xml with encoded credentials
+  ansible.windows.win_copy:
+    content: |
+      <?xml version="1.0" encoding="utf-8"?>
+      <unattend xmlns="urn:schemas-microsoft-com:unattend">
+          <settings pass="specialize">
+              <component name="Microsoft-Windows-Shell-Setup"
+                         processorArchitecture="amd64"
+                         publicKeyToken="31bf3856ad364e35"
+                         language="neutral"
+                         versionScope="nonSxS"
+                         xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+                  <AutoLogon>
+                      <Password>
+                          <Value>{{ unattend_b64_password }}</Value>
+                          <PlainText>false</PlainText>
+                      </Password>
+                      <Enabled>true</Enabled>
+                      <Username>{{ ludus_win_privesc_admin_user }}</Username>
+                  </AutoLogon>
+                  <UserAccounts>
+                      <LocalAccounts>
+                          <LocalAccount wcm:action="add">
+                              <Password>
+                                  <Value>{{ unattend_b64_password }}</Value>
+                                  <PlainText>false</PlainText>
+                              </Password>
+                              <Group>Administrators</Group>
+                              <Name>{{ ludus_win_privesc_admin_user }}</Name>
+                          </LocalAccount>
+                      </LocalAccounts>
+                  </UserAccounts>
+              </component>
+          </settings>
+      </unattend>
+    dest: "C:\\Windows\\Panther\\Unattend\\unattend.xml"
+
+- name: Print Answer Files scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== Answer Files (Unattend.xml) Scenario ==="
+      - "Locations to check:"
+      - "  C:\\Windows\\Panther\\Unattend\\unattend.xml"
+      - "  C:\\Windows\\Panther\\unattend.xml"
+      - "  C:\\Windows\\System32\\sysprep\\unattend.xml"
+      - "Password is base64 encoded (decode and strip 'Password' suffix)"
+      - "Tool: winPEAS will automatically enumerate this"

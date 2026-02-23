@@ -1,0 +1,20 @@
+---
+# Logon Autostart Execution (Startup Folder) Lab Setup
+# Makes the All-Users Startup folder writable by Everyone.
+# Any file dropped here runs for all users at logon.
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/LogonAutostartExecutionStartupFolder.md
+
+- name: Grant Everyone write to the All-Users Startup folder
+  ansible.windows.win_shell: |
+    $startupPath = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup"
+    icacls $startupPath /grant Everyone:F | Out-Null
+
+- name: Print Weak Startup Folder scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== Logon Autostart Execution (Startup Folder) Scenario ==="
+      - "Path: C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"
+      - "Enumerate: icacls 'C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup'"
+      - "Exploit: Drop a .bat/.exe/.lnk here - executes on next user logon"
+      - "Tool: accesschk64.exe -wud 'C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup'"

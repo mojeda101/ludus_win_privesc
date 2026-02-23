@@ -1,0 +1,48 @@
+---
+# Weak Service Binary Permissions Lab Setup
+# Deploys a service whose binary is writable by Everyone.
+# The victim can overwrite the binary and have their payload run as SYSTEM.
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/WeakServiceBinaryPermissions.md
+
+- name: Create directory for weak binary service
+  ansible.windows.win_file:
+    path: "C:\\Services\\WeakBinary"
+    state: directory
+
+- name: Copy placeholder binary for WeakBinarySvc (skip if already exists)
+  ansible.windows.win_shell: |
+    $dest = "C:\Services\WeakBinary\WeakBinarySvc.exe"
+    if (-not (Test-Path $dest)) {
+      Copy-Item "C:\Windows\System32\cmd.exe" $dest -Force
+    }
+
+- name: Grant Everyone full control on the service binary
+  ansible.windows.win_shell: |
+    icacls "C:\Services\WeakBinary\WeakBinarySvc.exe" /grant Everyone:F | Out-Null
+
+- name: Create WeakBinarySvc service
+  ansible.windows.win_shell: |
+    $svcName = "WeakBinarySvc"
+    if (Get-Service -Name $svcName -ErrorAction SilentlyContinue) {
+      Stop-Service $svcName -Force -ErrorAction SilentlyContinue
+      & sc.exe delete $svcName | Out-Null
+      Start-Sleep -Seconds 2
+    }
+    & sc.exe create $svcName `
+      binPath= "C:\Services\WeakBinary\WeakBinarySvc.exe" `
+      DisplayName= "Weak Binary Permissions Demo" `
+      start= auto | Out-Null
+    & sc.exe description $svcName "Intentionally vulnerable service for LPE training" | Out-Null
+
+- name: Grant service restart rights to victim user
+  ansible.windows.win_shell: |
+    & sc.exe sdset WeakBinarySvc "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;RPWPCR;;;BU)" | Out-Null
+
+- name: Print Weak Service Binary scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== Weak Service Binary Permissions Scenario ==="
+      - "Service binary: C:\\Services\\WeakBinary\\WeakBinarySvc.exe (Everyone:F)"
+      - "Enumerate: icacls C:\\Services\\WeakBinary\\WeakBinarySvc.exe"
+      - "Replace binary, then: sc stop WeakBinarySvc && sc start WeakBinarySvc"

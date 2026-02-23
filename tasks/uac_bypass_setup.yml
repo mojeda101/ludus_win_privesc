@@ -1,0 +1,40 @@
+---
+# UAC Bypass Lab Setup
+# Ensures UAC is enabled at the default level (Prompt for consent).
+# The victim user is added to the local Administrators group but UAC is on,
+# requiring bypass techniques to reach a High integrity process.
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/UACBypass.md
+
+- name: Enable UAC via registry
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System
+    name: "{{ item.name }}"
+    data: "{{ item.data }}"
+    type: dword
+    state: present
+  loop:
+    - { name: "EnableLUA",             data: 1 }
+    - { name: "ConsentPromptBehaviorAdmin", data: 5 }  # Prompt for non-Windows binaries
+    - { name: "PromptOnSecureDesktop", data: 1 }
+
+- name: Add victim user to local Administrators (needed for UAC bypass practice)
+  ansible.windows.win_group_membership:
+    name: Administrators
+    members:
+      - "{% if ludus_win_privesc_victim_user_type == 'domain' %}{{ ludus_win_privesc_domain | default('') }}\\{{ ludus_win_privesc_victim_user }}{% else %}{{ ludus_win_privesc_victim_user }}{% endif %}"
+    state: present
+
+- name: Print UAC Bypass scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== UAC Bypass Scenario ==="
+      - "User '{{ ludus_win_privesc_victim_user }}' is a local admin but UAC is ON."
+      - "Goal: Obtain a High integrity (elevated) process from a Medium integrity shell."
+      - "Common bypasses:"
+      - "  - fodhelper.exe registry hijack"
+      - "  - eventvwr.exe registry hijack"
+      - "  - sdclt.exe bypass"
+      - "  - ICMLuaUtil COM object"
+      - "Enumerate: whoami /groups | findstr Level"
+      - "Tool: UACMe - https://github.com/hfiref0x/UACME"

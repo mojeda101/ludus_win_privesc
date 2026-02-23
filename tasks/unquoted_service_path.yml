@@ -1,0 +1,68 @@
+---
+# Unquoted Service Path Lab Setup
+# Creates a service with an unquoted binary path containing spaces.
+# The victim can drop a malicious executable at an earlier token in the path
+# and have it execute as SYSTEM when the service restarts.
+#
+# Vulnerable path example: C:\Program Files\Vulnerable Service\vuln service.exe
+# Windows will try: C:\Program.exe -> C:\Program Files\Vulnerable.exe -> ...
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/UnquotedServicePath.md
+
+- name: Create directory structure for unquoted service path
+  ansible.windows.win_shell: |
+    New-Item -ItemType Directory -Force -Path "C:\Program Files\Vulnerable Service" | Out-Null
+
+- name: Copy placeholder binary for unquoted service (skip if already exists)
+  ansible.windows.win_shell: |
+    $dest = "C:\Program Files\Vulnerable Service\vuln service.exe"
+    if (-not (Test-Path $dest)) {
+      Copy-Item "C:\Windows\System32\cmd.exe" $dest -Force
+    }
+
+- name: Grant write permissions to "Program Files" for victim user (runs as SYSTEM)
+  ansible.windows.win_shell: |
+    if ("{{ ludus_win_privesc_victim_user_type }}" -eq "domain") {
+      $identity = "{{ ludus_win_privesc_domain | default("") }}\{{ ludus_win_privesc_victim_user }}"
+    } else {
+      $identity = "{{ ludus_win_privesc_victim_user }}"
+    }
+    $script  = "icacls 'C:\Program Files' /grant '${identity}:(OI)(CI)(W)' | Out-Null"
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
+    $action    = New-ScheduledTaskAction -Execute "powershell.exe" `
+                   -Argument "-NonInteractive -WindowStyle Hidden -EncodedCommand $encoded"
+    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    $settings  = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
+    Register-ScheduledTask -TaskName "IcaclsProgramFiles_LPELab" `
+      -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+    Start-ScheduledTask -TaskName "IcaclsProgramFiles_LPELab"
+    Start-Sleep -Seconds 5
+    Unregister-ScheduledTask -TaskName "IcaclsProgramFiles_LPELab" -Confirm:$false
+
+- name: Create UnquotedSvc service with unquoted path
+  ansible.windows.win_shell: |
+    $svcName = "UnquotedSvc"
+    if (Get-Service -Name $svcName -ErrorAction SilentlyContinue) {
+      Stop-Service $svcName -Force -ErrorAction SilentlyContinue
+      & sc.exe delete $svcName | Out-Null
+      Start-Sleep -Seconds 2
+    }
+    & sc.exe create $svcName `
+      binPath= "C:\Program Files\Vulnerable Service\vuln service.exe" `
+      DisplayName= "Unquoted Service Path Demo" `
+      start= auto | Out-Null
+    & sc.exe description $svcName "Intentionally vulnerable service for LPE training" | Out-Null
+
+- name: Grant service control permissions to victim user
+  ansible.windows.win_shell: |
+    # Allow victim to stop/start the service (needed to trigger payload)
+    & sc.exe sdset UnquotedSvc "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;RPWPCR;;;BU)" | Out-Null
+
+- name: Print Unquoted Service Path scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== Unquoted Service Path Scenario ==="
+      - "Service 'UnquotedSvc' binary: C:\\Program Files\\Vulnerable Service\\vuln service.exe"
+      - "Drop payload at: C:\\Program.exe (runs as SYSTEM on service restart)"
+      - "Enumerate: wmic service get name,pathname | findstr /i /v '\"' | findstr /i /v 'C:\\Windows'"
+      - "Restart: sc stop UnquotedSvc && sc start UnquotedSvc"

@@ -1,0 +1,38 @@
+---
+# Leaked Credentials in PowerShell History
+# Populates the PSReadLine ConsoleHost_history.txt for the victim user
+# with commands that contain plaintext credentials.
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/LeakedCredentialsPowerShellHistory.md
+
+- name: Create PSReadLine history directory for victim user
+  ansible.windows.win_shell: |
+    if ("{{ ludus_win_privesc_victim_user_type }}" -eq "domain") {
+      $profileBase = "C:\Users\{{ ludus_win_privesc_victim_user }}"
+      # Domain profiles may not exist until first logon; create it
+      if (-not (Test-Path $profileBase)) {
+        New-Item -ItemType Directory -Force -Path $profileBase | Out-Null
+      }
+    } else {
+      $profileBase = "C:\Users\{{ ludus_win_privesc_victim_user }}"
+    }
+    $histDir = "$profileBase\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine"
+    New-Item -ItemType Directory -Force -Path $histDir | Out-Null
+
+- name: Write fake credential commands into PSReadLine history
+  ansible.windows.win_copy:
+    content: |
+      Get-ChildItem C:\
+      net user
+      $pass = ConvertTo-SecureString "{{ ludus_win_privesc_admin_password }}" -AsPlainText -Force
+      $cred = New-Object System.Management.Automation.PSCredential("{{ ludus_win_privesc_admin_user }}", $pass)
+      Invoke-Command -ComputerName localhost -Credential $cred -ScriptBlock { whoami }
+      net use Z: \\fileserver\share /user:{{ ludus_win_privesc_admin_user }} {{ ludus_win_privesc_admin_password }}
+      Get-Process
+    dest: "C:\\Users\\{{ ludus_win_privesc_victim_user }}\\AppData\\Roaming\\Microsoft\\Windows\\PowerShell\\PSReadLine\\ConsoleHost_history.txt"
+- name: Print PS History scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== Leaked Credentials in PowerShell History Scenario ==="
+      - "History file: C:\\Users\\{{ ludus_win_privesc_victim_user }}\\AppData\\Roaming\\Microsoft\\Windows\\PowerShell\\PSReadLine\\ConsoleHost_history.txt"
+      - "Enumerate: type $env:APPDATA\\Microsoft\\Windows\\PowerShell\\PSReadLine\\ConsoleHost_history.txt"

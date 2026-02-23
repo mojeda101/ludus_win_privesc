@@ -1,0 +1,127 @@
+---
+# ludus_win_privesc - tasks/main.yml
+# Sets up Windows privilege escalation lab scenarios from:
+#   https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook
+
+- name: Disable Windows Defender via scheduled task (runs as SYSTEM to bypass access denied)
+  ansible.windows.win_shell: |
+    $action  = New-ScheduledTaskAction -Execute "powershell.exe" -Argument @"
+    -NonInteractive -WindowStyle Hidden -Command "
+      Set-MpPreference -DisableRealtimeMonitoring `$true;
+      Set-MpPreference -DisableIOAVProtection `$true;
+      Set-MpPreference -DisableBehaviorMonitoring `$true;
+      Set-MpPreference -DisableBlockAtFirstSeen `$true;
+      Set-MpPreference -DisableScriptScanning `$true;
+      Set-MpPreference -MAPSReporting 0;
+      Set-MpPreference -SubmitSamplesConsent 2;
+      Set-MpPreference -DisableArchiveScanning `$true;
+      Set-MpPreference -DisableIntrusionPreventionSystem `$true
+    "
+    "@
+    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    $settings  = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+    $task      = Register-ScheduledTask -TaskName "DisableDefender_LPELab" `
+                   -Action $action -Principal $principal -Settings $settings -Force
+    Start-ScheduledTask -TaskName "DisableDefender_LPELab"
+    Start-Sleep -Seconds 10
+    Unregister-ScheduledTask -TaskName "DisableDefender_LPELab" -Confirm:$false
+  when: ludus_win_privesc_disable_defender | bool
+  ignore_errors: true
+
+- name: Disable Defender via registry (persistent, survives reboot)
+  ansible.windows.win_regedit:
+    path: "{{ item.path }}"
+    name: "{{ item.name }}"
+    data: "{{ item.data }}"
+    type: dword
+    state: present
+  loop:
+    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender',                       name: 'DisableAntiSpyware',        data: 1 }
+    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection', name: 'DisableRealtimeMonitoring', data: 1 }
+    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection', name: 'DisableIOAVProtection',     data: 1 }
+    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection', name: 'DisableBehaviorMonitoring', data: 1 }
+    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Spynet',               name: 'SpynetReporting',           data: 0 }
+    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Spynet',               name: 'SubmitSamplesConsent',      data: 2 }
+  when: ludus_win_privesc_disable_defender | bool
+  ignore_errors: true
+
+
+- name: Create local victim low-privilege user
+  ansible.windows.win_user:
+    name: "{{ ludus_win_privesc_victim_user }}"
+    password: "{{ ludus_win_privesc_victim_password }}"
+    password_never_expires: true
+    state: present
+    groups:
+      - Users
+  when: ludus_win_privesc_victim_user_type == 'local'
+
+
+
+- name: Enable local Administrator account and set password
+  ansible.windows.win_user:
+    name: "{{ ludus_win_privesc_admin_user }}"
+    password: "{{ ludus_win_privesc_admin_password }}"
+    account_disabled: false
+    state: present
+
+# ── Privilege Token Scenarios ─────────────────────────────────────────────────
+- name: Include SeImpersonatePrivilege scenario
+  ansible.builtin.include_tasks: seimpersonate.yml
+  when: ludus_win_privesc_seimpersonate | bool
+
+- name: Include SeBackupPrivilege scenario
+  ansible.builtin.include_tasks: sebackup.yml
+  when: ludus_win_privesc_sebackup | bool
+
+# ── Service Misconfiguration Scenarios ────────────────────────────────────────
+- name: Include Unquoted Service Path scenario
+  ansible.builtin.include_tasks: unquoted_service_path.yml
+  when: ludus_win_privesc_unquoted_service_path | bool
+
+- name: Include Weak Service Binary Permissions scenario
+  ansible.builtin.include_tasks: weak_service_binary.yml
+  when: ludus_win_privesc_weak_service_binary | bool
+
+- name: Include Weak Service Registry Permissions scenario
+  ansible.builtin.include_tasks: weak_service_registry.yml
+  when: ludus_win_privesc_weak_service_registry | bool
+
+# ── Credential Discovery Scenarios ────────────────────────────────────────────
+- name: Include Hardcoded Credentials (.NET) scenario
+  ansible.builtin.include_tasks: hardcoded_creds_dotnet.yml
+  when: ludus_win_privesc_hardcoded_credentials_dotnet | bool
+
+- name: Include Stored Credentials (Winlogon) scenario
+  ansible.builtin.include_tasks: stored_creds_winlogon.yml
+  when: ludus_win_privesc_stored_credentials_winlogon | bool
+
+- name: Include Leaked Creds in PowerShell History scenario
+  ansible.builtin.include_tasks: leaked_creds_ps_history.yml
+  when: ludus_win_privesc_leaked_creds_ps_history | bool
+
+- name: Include Leaked Creds in Git Repository scenario
+  ansible.builtin.include_tasks: leaked_creds_git.yml
+  when: ludus_win_privesc_leaked_creds_git | bool
+
+- name: Include Answer Files (Unattend) scenario
+  ansible.builtin.include_tasks: answer_files.yml
+  when: ludus_win_privesc_answer_files | bool
+
+# ── Autostart / Persistence Scenarios ─────────────────────────────────────────
+- name: Include AlwaysInstallElevated scenario
+  ansible.builtin.include_tasks: always_install_elevated.yml
+  when: ludus_win_privesc_always_install_elevated | bool
+
+- name: Include Weak Startup Folder scenario
+  ansible.builtin.include_tasks: weak_startup_folder.yml
+  when: ludus_win_privesc_weak_startup_folder | bool
+
+- name: Include Weak Registry Run Key scenario
+  ansible.builtin.include_tasks: weak_registry_run_key.yml
+  when: ludus_win_privesc_weak_registry_run_key | bool
+
+# ── UAC Setup ────────────────────────────────────────────────────────────────
+- name: Include UAC Bypass Setup scenario
+  ansible.builtin.include_tasks: uac_bypass_setup.yml
+  when: ludus_win_privesc_uac_bypass_setup | bool

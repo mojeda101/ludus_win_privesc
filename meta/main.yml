@@ -1,0 +1,19 @@
+---
+galaxy_info:
+  author: "YourGithubUsername"
+  description: "Ansible Role that configures Windows privilege escalation lab scenarios based on the nickvourd/Windows-Local-Privilege-Escalation-Cookbook"
+  license: MIT
+  min_ansible_version: "2.9"
+  platforms:
+    - name: Windows
+      versions:
+        - 2019
+        - 2022
+  galaxy_tags:
+    - windows
+    - security
+    - privilege_escalation
+    - pentest
+    - ludus
+
+dependencies: []

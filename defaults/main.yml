@@ -1,0 +1,73 @@
+---
+# Windows Defender - disable it so misconfigurations can be demonstrated
+# WARNING: Only use in lab environments!
+ludus_win_privesc_disable_defender: true
+
+# Create a low-privilege victim user for escalation exercises
+# Set ludus_win_privesc_victim_user_type to 'local' or 'domain'
+# For 'domain': the user must already exist in Active Directory
+ludus_win_privesc_victim_user_type: "local"
+ludus_win_privesc_victim_user: "lowpriv"
+ludus_win_privesc_victim_password: "Password123!"  # only used for local user creation
+
+# Domain settings (only needed when victim_user_type is 'domain')
+# Auto-detects NetBIOS domain name from the machine's domain membership if not set
+ludus_win_privesc_domain: "{{ ansible_domain.split('.')[0] | upper if ansible_domain is defined and ansible_domain else '' }}"
+
+# Privileged / Administrator account credentials used in credential-leak scenarios
+# (stored creds, PS history, git leaks, answer files, etc.)
+ludus_win_privesc_admin_user: "Administrator"
+ludus_win_privesc_admin_password: "P@ssw0rd123!"
+
+# Enable/disable each vulnerability scenario independently
+# ─── Privilege Token Abuses ───────────────────────────────────────────────────
+# Grants SeImpersonatePrivilege to the victim user + sets up IIS with cmdasp.aspx
+ludus_win_privesc_seimpersonate: true
+
+# Grants SeBackupPrivilege to the victim user
+ludus_win_privesc_sebackup: true
+
+# ─── Service Misconfigurations ────────────────────────────────────────────────
+# Deploys a service binary to a path with spaces and no quotes
+ludus_win_privesc_unquoted_service_path: true
+
+# Deploys a service binary that is world-writable (Everyone:F)
+ludus_win_privesc_weak_service_binary: true
+
+# Deploys a service whose registry key grants Everyone write access
+ludus_win_privesc_weak_service_registry: true
+
+# ─── Credential Discovery ─────────────────────────────────────────────────────
+# Drops a .NET service with hardcoded admin credentials
+ludus_win_privesc_hardcoded_credentials_dotnet: true
+
+# Writes admin credentials into Winlogon AutoLogon registry keys
+ludus_win_privesc_stored_credentials_winlogon: true
+
+# Populates PSReadLine history with plaintext credentials
+ludus_win_privesc_leaked_creds_ps_history: true
+
+# Creates a local git repo with "committed" credentials
+ludus_win_privesc_leaked_creds_git: true
+
+# Drops a Panther\Unattend\unattend.xml with a base64-encoded password
+ludus_win_privesc_answer_files: true
+
+# ─── Autostart / Persistence Misconfigurations ───────────────────────────────
+# Sets AlwaysInstallElevated = 1 in both HKLM and HKCU
+ludus_win_privesc_always_install_elevated: true
+
+# Makes Startup Folder world-writable
+ludus_win_privesc_weak_startup_folder: true
+
+# Makes a HKCU Run key world-writable
+ludus_win_privesc_weak_registry_run_key: true
+
+# ─── UAC ─────────────────────────────────────────────────────────────────────
+# Enables UAC (scenario requires a medium-integrity shell to practice bypass)
+ludus_win_privesc_uac_bypass_setup: true
+
+# Enumeration tool installation
+# Set to false - tools must be transferred manually to the target
+ludus_win_privesc_install_enum_tools: false
+ludus_win_privesc_tools_path: "C:\\Tools\\PrivEsc"
