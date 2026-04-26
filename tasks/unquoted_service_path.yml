@@ -27,7 +27,7 @@
     } else {
       $identity = "{{ ludus_win_privesc_victim_user }}"
     }
-    $script  = "icacls 'C:\Program Files' /grant '${identity}:(OI)(CI)(W)' | Out-Null"
+    $script  = "cmd.exe /c icacls `"C:\Program Files`" /grant `"${identity}:(OI)(CI)W`""
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
     $action    = New-ScheduledTaskAction -Execute "powershell.exe" `
                    -Argument "-NonInteractive -WindowStyle Hidden -EncodedCommand $encoded"

@@ -1,0 +1,21 @@
+---
+# SeLoadDriverPrivilege Lab Setup
+# Grants SeLoadDriverPrivilege to the victim user, allowing them to load
+# arbitrary kernel drivers — including vulnerable/signed ones like Capcom.sys.
+#
+# Exploit: EOPLoadDriver.exe System\CurrentControlSet\MyService C:\evil.sys
+#          Use Capcom.sys to execute arbitrary code in kernel context → SYSTEM.
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/SeLoadDriverPrivilege.md
+
+# ═══ SCENARIO 19 — SeLoadDriverPrivilege ═══
+
+- name: Print SeLoadDriverPrivilege scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== SeLoadDriverPrivilege Scenario ==="
+      - "User '{{ ludus_win_privesc_victim_user }}' has SeLoadDriverPrivilege."
+      - "Exploit: EOPLoadDriver.exe System\\CurrentControlSet\\MyService C:\\Capcom.sys"
+      - "         Then use Capcom exploit to run shellcode in kernel context."
+      - "Tool: https://github.com/TarlogicSecurity/EoPLoadDriver"
+      - "      https://github.com/tandasat/ExploitCapcom"

@@ -1,0 +1,134 @@
+---
+# Combined Privilege Grant via secedit with SID (not plaintext username)
+# Key insight: secedit must use *SID format (e.g. *S-1-5-21-...) NOT plaintext
+# usernames. Plaintext names are stored in the policy DB but Windows fails to
+# translate them to token privileges during logon in some configurations.
+
+# ═══ Combined Se*Privilege Grant (secedit + SID) ═══
+
+- name: Deploy LsaRights.cs helper to target (used for validation)
+  ansible.windows.win_copy:
+    src: LsaRights.cs
+    dest: C:\Windows\Temp\LsaRights.cs
+
+- name: Grant all enabled Se*Privileges via secedit using SID format
+  ansible.windows.win_shell: |
+    $cfgFile = "$env:TEMP\privesc_grant.ini"
+    $dbFile  = "$env:TEMP\privesc_grant.sdb"
+
+    # Resolve SID — this works fine under WinRM
+    if ("{{ ludus_win_privesc_victim_user_type }}" -eq "domain") {
+      $sid = (New-Object System.Security.Principal.NTAccount(
+        "{{ ludus_win_privesc_domain | default('') }}\{{ ludus_win_privesc_victim_user }}"
+      )).Translate([System.Security.Principal.SecurityIdentifier]).Value
+    } else {
+      $sid = (Get-LocalUser -Name "{{ ludus_win_privesc_victim_user }}").SID.Value
+    }
+
+    & secedit /export /cfg $cfgFile | Out-Null
+    $content = Get-Content $cfgFile
+
+    # Replace ANY existing plaintext username with *SID (cleanup previous runs)
+    $content = $content -replace '\b{{ ludus_win_privesc_victim_user }}\b', "*$sid"
+
+    $privIdx = ($content | Select-String '\[Privilege Rights\]').LineNumber
+
+    $privMap = [ordered]@{
+      "SeImpersonatePrivilege"   = ${{ ludus_win_privesc_seimpersonate   | bool | lower }}
+      "SeBackupPrivilege"        = ${{ ludus_win_privesc_sebackup        | bool | lower }}
+      "SeDebugPrivilege"         = ${{ ludus_win_privesc_sedebug         | bool | lower }}
+      "SeRestorePrivilege"       = ${{ ludus_win_privesc_serestore       | bool | lower }}
+      "SeTakeOwnershipPrivilege" = ${{ ludus_win_privesc_setakeownership | bool | lower }}
+      "SeLoadDriverPrivilege"    = ${{ ludus_win_privesc_seloaddriver    | bool | lower }}
+      "SeManageVolumePrivilege"  = ${{ ludus_win_privesc_semanagevolume  | bool | lower }}
+    }
+
+    foreach ($priv in $privMap.Keys) {
+      if (-not $privMap[$priv]) { continue }
+      $entry = "*$sid"
+      if ($content -match "^$priv\s*=") {
+        $content = $content | ForEach-Object {
+          if ($_ -match "^$priv\s*=" -and $_ -notmatch [regex]::Escape($entry)) {
+            "$_,$entry"
+          } else { $_ }
+        }
+      } else {
+        $content = $content[0..($privIdx-1)] + "$priv = $entry" + $content[$privIdx..($content.Length-1)]
+        $privIdx++
+      }
+    }
+
+    $content | Set-Content $cfgFile
+    & secedit /import /cfg $cfgFile /db $dbFile /overwrite /quiet | Out-Null
+    & secedit /configure /db $dbFile /quiet | Out-Null
+    & gpupdate /force /quiet | Out-Null
+    Remove-Item $cfgFile, $dbFile -ErrorAction SilentlyContinue
+    Write-Output "DONE: SID=$sid"
+  register: _secedit_grant
+  failed_when: "'DONE' not in _secedit_grant.stdout"
+
+- name: Show grant result
+  ansible.builtin.debug:
+    msg: "{{ _secedit_grant.stdout | trim }}"
+
+- name: Reboot to ensure new token is issued on next logon
+  ansible.windows.win_reboot:
+    reboot_timeout: 300
+    post_reboot_delay: 15
+  when: ludus_win_privesc_reboot_after_privs | bool
+
+- name: Validate all enabled Se*Privileges via LSA API
+  ansible.windows.win_shell: |
+    if (-not ([System.Management.Automation.PSTypeName]"LsaRights").Type) {
+      Add-Type -Path "C:\Windows\Temp\LsaRights.cs" -ErrorAction Stop
+    }
+
+    if ("{{ ludus_win_privesc_victim_user_type }}" -eq "domain") {
+      $sid = (New-Object System.Security.Principal.NTAccount(
+        "{{ ludus_win_privesc_domain | default('') }}\{{ ludus_win_privesc_victim_user }}"
+      )).Translate([System.Security.Principal.SecurityIdentifier])
+    } else {
+      $sid = (Get-LocalUser -Name "{{ ludus_win_privesc_victim_user }}").SID
+    }
+    $assigned = [LsaRights]::Get($sid)
+
+    $expected = [ordered]@{
+      "SeImpersonatePrivilege"   = ${{ ludus_win_privesc_seimpersonate   | bool | lower }}
+      "SeBackupPrivilege"        = ${{ ludus_win_privesc_sebackup        | bool | lower }}
+      "SeDebugPrivilege"         = ${{ ludus_win_privesc_sedebug         | bool | lower }}
+      "SeRestorePrivilege"       = ${{ ludus_win_privesc_serestore       | bool | lower }}
+      "SeTakeOwnershipPrivilege" = ${{ ludus_win_privesc_setakeownership | bool | lower }}
+      "SeLoadDriverPrivilege"    = ${{ ludus_win_privesc_seloaddriver    | bool | lower }}
+      "SeManageVolumePrivilege"  = ${{ ludus_win_privesc_semanagevolume  | bool | lower }}
+    }
+
+    $missing = @()
+    foreach ($priv in $expected.Keys) {
+      if ($expected[$priv] -and ($assigned -notcontains $priv)) {
+        $missing += $priv
+      }
+    }
+
+    if ($missing.Count -eq 0) {
+      Write-Output "OK: assigned=$($assigned -join ',')"
+    } else {
+      Write-Output "FAIL: missing=$($missing -join ',') assigned=$($assigned -join ',')"
+    }
+  register: _sepriv_validate
+  tags: validate
+
+- name: Assert all Se*Privileges are correctly assigned
+  ansible.builtin.fail:
+    msg: >
+      Se*Privilege validation failed —
+      {{ _sepriv_validate.stdout | trim }}
+  when: (_sepriv_validate.stdout | trim).startswith('FAIL')
+  tags: validate
+
+- name: Print Se*Privilege grant summary
+  ansible.builtin.debug:
+    msg:
+      - "=== Se*Privilege Grant Summary ==="
+      - "{{ _sepriv_validate.stdout | trim }}"
+      - "Log out and back in as {{ ludus_win_privesc_victim_user }} to see privileges."
+      - "Verify: whoami /priv"

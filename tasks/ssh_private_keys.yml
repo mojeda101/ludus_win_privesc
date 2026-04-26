@@ -1,0 +1,177 @@
+---
+# SSH Private Key Discovery Lab Setup
+# Drops unprotected SSH private keys in common locations that automated
+# tools and manual recon would find:
+#   - Victim user's .ssh directory (id_rsa, id_ed25519)
+#   - Admin user's .ssh directory (authorized_keys pointing back)
+#   - A "backup" key left in C:\Temp and C:\ProgramData
+#   - Known_hosts revealing internal hostnames/IPs
+#
+# Detection: enumerate .ssh directories and check key file permissions
+#
+# Exploit: Use the unprotected private key to SSH into other hosts:
+#   ssh -i id_rsa administrator@<target>
+#   ssh -i id_ed25519 root@<linux-host>
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/SSHPrivateKeys.md
+
+# ═══ SCENARIO 29 — SSH Private Key Discovery ═══
+
+- name: Ensure OpenSSH client is installed (Win10/11/Server 2019+)
+  ansible.windows.win_shell: |
+    $cap = Get-WindowsCapability -Online -Name "OpenSSH.Client*" -ErrorAction SilentlyContinue
+    if ($cap -and $cap.State -ne "Installed") {
+      Add-WindowsCapability -Online -Name "OpenSSH.Client~~~~0.0.1.0" -ErrorAction SilentlyContinue | Out-Null
+    }
+  ignore_errors: true
+
+- name: Create .ssh directory for victim user
+  ansible.windows.win_file:
+    path: "C:\\Users\\{{ ludus_win_privesc_victim_user }}\\.ssh"
+    state: directory
+
+- name: Drop unprotected RSA private key for victim user
+  ansible.windows.win_copy:
+    content: |
+      -----BEGIN OPENSSH PRIVATE KEY-----
+      b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+      QyNTUxOQAAACBY2rMaFHMl5K9mNMsTwm6tTBqXPNGIqHRNZSsKpPQ0uAAAAJiPCjkxjw
+      o5MQAAAAtzc2gtZWQyNTUxOQAAACBY2rMaFHMl5K9mNMsTwm6tTBqXPNGIqHRNZSsKpP
+      Q0uAAAAEA8yNgcn5iFqfN8MXPpW9x4kJRzVfpYbNqXw7T2uNY2VjWsxoUcyXkr2Y0yx
+      PCbq1MGpc80YiodE1lKwqk9DS4AAAARbG93cHJpdkBsYWIubG9jYWw=
+      -----END OPENSSH PRIVATE KEY-----
+    dest: "C:\\Users\\{{ ludus_win_privesc_victim_user }}\\.ssh\\id_ed25519"
+
+- name: Drop matching public key for victim user
+  ansible.windows.win_copy:
+    content: |
+      ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFjasx oUcyXkr2Y0yxPCbq1MGpc80YiodE1lKwqk9DS4 lowpriv@lab.local
+    dest: "C:\\Users\\{{ ludus_win_privesc_victim_user }}\\.ssh\\id_ed25519.pub"
+
+- name: Drop unprotected RSA private key for victim user (second key — common find)
+  ansible.windows.win_copy:
+    content: |
+      -----BEGIN RSA PRIVATE KEY-----
+      MIIEowIBAAKCAQEA2a2rwplBQLzHPZe5RJr9PMmnFDTZKGCMFxGmGVTOEGqMnFos
+      nfHvCCkHAOxq0IIBVBJ5H0mFBqOYMBT5DEWQhb7OMFBNM8pTdkHGbPHZaHOI71q
+      i2bO0xBDhQ9bLoMXZFkQ5pWjWfhHKV2lQfP3DVL5RWkAAo3KFOhS5IjFCKxFT5S
+      MIILab+ExampleRSAKeyForPrivEscLab+AAAA==
+      -----END RSA PRIVATE KEY-----
+    dest: "C:\\Users\\{{ ludus_win_privesc_victim_user }}\\.ssh\\id_rsa"
+
+- name: Drop RSA public key for victim user
+  ansible.windows.win_copy:
+    content: |
+      ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDZravRoUBQvMc9l7lEmv08wacUNNkoYIwXEaYZVM4QaoyeWiyd8e8IKQcA7GrQggFUEnkfSYUGo5gwFPkMRZCFvs4wUE0zylN2QcZs8dloc4jvWqLZs7TEEOF D1sugxdkWRDmlaVZ+EcpXaVB8/cNUvlFaQACjcoU6FLkiMUIrEVPlIw== lowpriv@lab.local
+    dest: "C:\\Users\\{{ ludus_win_privesc_victim_user }}\\.ssh\\id_rsa.pub"
+
+- name: Drop known_hosts revealing internal network topology
+  ansible.windows.win_copy:
+    content: |
+      # SSH known_hosts — reveals internal hosts and their keys
+      dc01.lab.local,10.10.10.10 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC7...
+      fileserver.lab.local,10.10.10.20 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
+      linuxdev.lab.local,10.10.10.30 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTIt...
+      10.10.10.10 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC7...
+      10.10.10.20 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
+    dest: "C:\\Users\\{{ ludus_win_privesc_victim_user }}\\.ssh\\known_hosts"
+
+- name: Set insecure permissions on victim .ssh directory (Everyone readable)
+  ansible.windows.win_shell: |
+    # Intentionally weak ACL — any local user can read the private keys
+    icacls "C:\Users\{{ ludus_win_privesc_victim_user }}\.ssh" /grant Everyone:R /T | Out-Null
+    icacls "C:\Users\{{ ludus_win_privesc_victim_user }}\.ssh\id_ed25519" /grant Everyone:R | Out-Null
+    icacls "C:\Users\{{ ludus_win_privesc_victim_user }}\.ssh\id_rsa" /grant Everyone:R | Out-Null
+
+- name: Create .ssh directory for Administrator (high-value target)
+  ansible.windows.win_file:
+    path: "C:\\Users\\{{ ludus_win_privesc_admin_user }}\\.ssh"
+    state: directory
+
+- name: Drop authorized_keys for Administrator accepting victim's key
+  ansible.windows.win_copy:
+    content: |
+      # Administrator authorized_keys — accepts lowpriv key (misconfiguration)
+      ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFjasx oUcyXkr2Y0yxPCbq1MGpc80YiodE1lKwqk9DS4 lowpriv@lab.local
+      ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDZravRoUBQvMc9l7lEmv08wacUNNkoYIwXEaYZVM4QaoyeWiyd8e8IKQcA7GrQggFUEnkfSYUGo5gwFPkMRZCFvs4wUE0zylN2QcZs8dloc4jvWqLZs7TEOFD1sugxdkWRDmlaVZ+EcpXaVB8/cNUvlFaQACjcoU6FLkiMUIrEVPlIw== lowpriv@lab.local
+    dest: "C:\\Users\\{{ ludus_win_privesc_admin_user }}\\.ssh\\authorized_keys"
+
+- name: Drop abandoned backup key in C:\Temp (common ops mistake)
+  ansible.windows.win_copy:
+    content: |
+      -----BEGIN OPENSSH PRIVATE KEY-----
+      b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+      QyNTUxOQAAACBbackupkeyforjumpboxAAAAbackupkeyforjumpbox000000000000000
+      -----END OPENSSH PRIVATE KEY-----
+    dest: "C:\\Temp\\backup_jumpbox_key"
+
+- name: Ensure C:\Temp backup key is world-readable
+  ansible.windows.win_shell: |
+    New-Item -ItemType Directory -Force -Path "C:\Temp" | Out-Null
+    icacls "C:\Temp\backup_jumpbox_key" /grant Everyone:R | Out-Null
+
+- name: Drop SSH config file revealing additional targets
+  ansible.windows.win_copy:
+    content: |
+      # SSH config — reveals hostnames, users, and key paths
+      Host jumpbox
+          HostName 10.10.10.1
+          User administrator
+          IdentityFile C:\Temp\backup_jumpbox_key
+          StrictHostKeyChecking no
+
+      Host dc01
+          HostName dc01.lab.local
+          User administrator
+          IdentityFile C:\Users\lowpriv\.ssh\id_rsa
+          StrictHostKeyChecking no
+
+      Host linuxdev
+          HostName 10.10.10.30
+          User root
+          IdentityFile C:\Users\lowpriv\.ssh\id_ed25519
+          StrictHostKeyChecking no
+    dest: "C:\\Users\\{{ ludus_win_privesc_victim_user }}\\.ssh\\config"
+
+- name: Validate SSH private key files exist and are world-readable
+  ansible.windows.win_shell: |
+    $keys = @(
+      "C:\Users\{{ ludus_win_privesc_victim_user }}\.ssh\id_ed25519",
+      "C:\Users\{{ ludus_win_privesc_victim_user }}\.ssh\id_rsa",
+      "C:\Temp\backup_jumpbox_key"
+    )
+    $missing = $keys | Where-Object { -not (Test-Path $_) }
+    if ($missing) {
+      Write-Output "FAIL: missing $($missing -join ', ')"
+    } else {
+      # Check Everyone readable on at least one key
+      $acl = (Get-Acl "C:\Users\{{ ludus_win_privesc_victim_user }}\.ssh\id_rsa").Access |
+             Where-Object { $_.IdentityReference -like "*Everyone*" }
+      if ($acl) { Write-Output "OK" } else { Write-Output "FAIL: ACL not world-readable" }
+    }
+  register: _ssh_validate
+  tags: validate
+
+- name: Assert SSH private key scenario is configured correctly
+  ansible.builtin.fail:
+    msg: >
+      SSH private key scenario validation failed — {{ _ssh_validate.stdout | trim }}.
+  when: not (_ssh_validate.stdout | trim).startswith('OK')
+  tags: validate
+
+- name: Print SSH private key scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== SSH Private Key Discovery Scenario ==="
+      - "Keys planted:"
+      - "  C:\\Users\\{{ ludus_win_privesc_victim_user }}\\.ssh\\id_ed25519  (Everyone:R)"
+      - "  C:\\Users\\{{ ludus_win_privesc_victim_user }}\\.ssh\\id_rsa      (Everyone:R)"
+      - "  C:\\Temp\\backup_jumpbox_key                    (Everyone:R)"
+      - "  C:\\Users\\{{ ludus_win_privesc_victim_user }}\\.ssh\\config      (reveals targets)"
+      - "  C:\\Users\\{{ ludus_win_privesc_victim_user }}\\.ssh\\known_hosts (reveals topology)"
+      - "Admin authorized_keys accepts lowpriv key — pivot to Administrator via SSH."
+      - "Enumerate: dir /s /b C:\\Users\\.ssh 2>nul"
+      - "           dir /s /b C:\\ProgramData\\.ssh 2>nul"
+      - "           dir C:\\Temp\\*key* 2>nul"
+      - "Exploit:   ssh -i id_rsa {{ ludus_win_privesc_admin_user }}@localhost"
+      - "           ssh -i id_ed25519 root@10.10.10.30"

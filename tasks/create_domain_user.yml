@@ -1,0 +1,80 @@
+---
+# Domain Victim User Setup
+# Creates the low-privilege victim user in Active Directory when
+# ludus_win_privesc_victim_user_type == 'domain'.
+#
+# This task runs on the PRIMARY DOMAIN CONTROLLER of the domain
+# defined in ludus_win_privesc_domain_fqdn. It uses the Ansible
+# microsoft.ad.user module (part of the microsoft.ad collection
+# that Ludus ships with) to create the user idempotently.
+#
+# The member VMs (WIN2022, WIN11) reference this user via domain SID
+# in all secedit/privilege tasks — so the user must exist in AD before
+# the role runs on member servers.
+#
+# Usage: include this task only when victim_user_type == 'domain'
+# and ludus_win_privesc_create_domain_user == true.
+
+# ═══ Domain Victim User Creation (DC-side) ═══
+
+- name: Ensure Active Directory module is available on DC
+  ansible.windows.win_shell: |
+    if (-not (Get-Module -ListAvailable -Name ActiveDirectory)) {
+      Install-WindowsFeature -Name RSAT-AD-PowerShell -IncludeManagementTools | Out-Null
+    }
+    Import-Module ActiveDirectory -ErrorAction Stop
+    Write-Output "AD_MODULE_OK"
+  register: _ad_module_check
+  failed_when: "'AD_MODULE_OK' not in _ad_module_check.stdout"
+
+- name: Create domain victim user in Active Directory
+  microsoft.ad.user:
+    name: "{{ ludus_win_privesc_victim_user }}"
+    firstname: "PrivEsc"
+    surname: "Lab Victim"
+    display_name: "PrivEsc Lab Victim ({{ ludus_win_privesc_victim_user }})"
+    description: "Low-privilege user for ludus_win_privesc lab scenarios"
+    password: "{{ ludus_win_privesc_victim_password }}"
+    password_never_expires: true
+    update_password: on_create        # nur setzen beim Erstellen, nicht überschreiben
+    enabled: true
+    path: "{{ ludus_win_privesc_victim_ou | default(omit) }}"
+    state: present
+  register: _domain_user_result
+
+- name: Show domain user creation result
+  ansible.builtin.debug:
+    msg: >
+      Domain user '{{ ludus_win_privesc_victim_user }}' —
+      {{ 'created' if _domain_user_result.changed else 'already exists (idempotent)' }}
+
+- name: Validate domain victim user exists in AD
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $user = Get-ADUser -Filter { SamAccountName -eq "{{ ludus_win_privesc_victim_user }}" } `
+            -ErrorAction SilentlyContinue
+    if ($user) {
+      Write-Output "OK: $($user.DistinguishedName)"
+    } else {
+      Write-Output "FAIL: user not found in AD"
+    }
+  register: _domain_user_validate
+  tags: validate
+
+- name: Assert domain victim user exists
+  ansible.builtin.fail:
+    msg: >
+      Domain user creation validation failed —
+      '{{ ludus_win_privesc_victim_user }}' not found in AD:
+      {{ _domain_user_validate.stdout | trim }}
+  when: not (_domain_user_validate.stdout | trim).startswith('OK')
+  tags: validate
+
+- name: Print domain user creation info
+  ansible.builtin.debug:
+    msg:
+      - "=== Domain Victim User ==="
+      - "User:     {{ ludus_win_privesc_domain }}\\{{ ludus_win_privesc_victim_user }}"
+      - "Password: {{ ludus_win_privesc_victim_password }}"
+      - "OU:       {{ ludus_win_privesc_victim_ou | default('default Users container') }}"
+      - "Status:   {{ _domain_user_validate.stdout | trim }}"

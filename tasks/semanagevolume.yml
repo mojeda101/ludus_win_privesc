@@ -1,0 +1,22 @@
+---
+# SeManageVolumePrivilege Lab Setup
+# Grants SeManageVolumePrivilege to the victim user, giving them raw volume
+# access. This allows reading sectors that contain restricted files like
+# SAM, SYSTEM, and SECURITY hives directly off disk.
+#
+# Exploit: Use CreateFile("\\\\.\C:", GENERIC_READ, FILE_SHARE_READ|WRITE, ...)
+#          with SeManageVolumePrivilege to read raw disk sectors containing SAM.
+#          Tool: https://github.com/CsEnox/SeManageVolumeExploit
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/SeManageVolumePrivilege.md
+
+# ═══ SCENARIO 20 — SeManageVolumePrivilege ═══
+
+- name: Print SeManageVolumePrivilege scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== SeManageVolumePrivilege Scenario ==="
+      - "User '{{ ludus_win_privesc_victim_user }}' has SeManageVolumePrivilege."
+      - "Exploit: SeManageVolumeExploit.exe → writes arbitrary DLL to System32"
+      - "         or raw volume read of SAM/SYSTEM sectors."
+      - "Tool: https://github.com/CsEnox/SeManageVolumeExploit"

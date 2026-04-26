@@ -1,0 +1,48 @@
+---
+# WDigest Enabled Lab Setup
+# Sets UseLogonCredential = 1 in the WDigest provider registry key.
+# This forces Windows to cache plaintext credentials in LSASS memory,
+# retrievable via mimikatz sekurlsa::wdigest.
+#
+# Detection: check HKLM\SYSTEM\...\WDigest\UseLogonCredential registry value
+#
+# Exploit: mimikatz# sekurlsa::wdigest
+#          (requires a user to log in after the registry value is set)
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/WDigest.md
+
+# ═══ SCENARIO 23 — WDigest Enabled ═══
+
+- name: Enable WDigest plaintext credential caching in LSASS
+  ansible.windows.win_regedit:
+    path: HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest
+    name: UseLogonCredential
+    data: 1
+    type: dword
+    state: present
+
+- name: Validate WDigest UseLogonCredential is set to 1
+  ansible.windows.win_reg_stat:
+    path: HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest
+    name: UseLogonCredential
+  register: _wdigest_reg
+  tags: validate
+
+- name: Assert WDigest is configured correctly
+  ansible.builtin.fail:
+    msg: >
+      WDigest scenario validation failed —
+      UseLogonCredential is not set to 1
+      (current value: {{ _wdigest_reg.value | default('missing') }}).
+  when: not _wdigest_reg.exists or _wdigest_reg.value != 1
+  tags: validate
+
+- name: Print WDigest scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== WDigest Enabled Scenario ==="
+      - "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\WDigest\\UseLogonCredential = 1"
+      - "Plaintext credentials will be cached in LSASS after next interactive logon."
+      - "Exploit: mimikatz# privilege::debug"
+      - "         mimikatz# sekurlsa::wdigest"
+      - "NOTE: Have a user log in after setup to populate LSASS cache."

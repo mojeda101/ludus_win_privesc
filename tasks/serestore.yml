@@ -1,0 +1,31 @@
+---
+# SeRestorePrivilege Lab Setup
+# Grants SeRestorePrivilege to the victim user, which allows writing to any
+# file regardless of ACLs — enabling DLL/binary replacement in System32.
+#
+# Exploit: Use SeRestorePrivilege to overwrite a System32 DLL loaded by a
+#          privileged service (e.g. utilman.exe → cmd.exe swap, or
+#          HijackLibs technique via CreateFile FLAG_BACKUP_SEMANTICS).
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/SeRestorePrivilege.md
+
+# ═══ SCENARIO 17 — SeRestorePrivilege ═══
+
+- name: Deploy test artifact — protected file in System32 (victim cannot access normally)
+  ansible.windows.win_shell: |
+    $target = "C:\Windows\System32\serestore_test.txt"
+    if (-not (Test-Path $target)) {
+      Set-Content -Path $target -Value "SeRestorePrivilege test artifact — overwrite me with your payload DLL"
+      # Lock it down so only SYSTEM/Admins can write normally
+      icacls $target /inheritance:r /grant:r "SYSTEM:(F)" /grant:r "Administrators:(F)" | Out-Null
+    }
+
+- name: Print SeRestorePrivilege scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== SeRestorePrivilege Scenario ==="
+      - "User '{{ ludus_win_privesc_victim_user }}' has SeRestorePrivilege."
+      - "Test artifact: C:\\Windows\\System32\\serestore_test.txt (Admin-only ACL)"
+      - "Exploit: Use EnableSeRestorePrivilege() + CreateFile(FILE_FLAG_BACKUP_SEMANTICS)"
+      - "         to overwrite a System32 DLL loaded by a privileged service."
+      - "Tool: https://github.com/dxnboy/redteam (SeRestoreAbuse)"

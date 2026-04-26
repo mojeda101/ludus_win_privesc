@@ -1,72 +1,70 @@
 ---
 # SeImpersonatePrivilege Lab Setup
-# Grants SeImpersonatePrivilege to the victim user and optionally sets up IIS
+# Grants SeImpersonatePrivilege to the victim user and sets up IIS
 # with a web shell (cmdasp.aspx) so the user can obtain a network service shell
 # and then use tools like PrintSpoofer or GodPotato to escalate to SYSTEM.
 #
+# Win11 note: Uses DISM (Enable-WindowsOptionalFeature) instead of
+# Install-WindowsFeature (Server-only). IIS-ASPNET45 was removed in Win11 22H2+
+# so we try both names and fall back gracefully.
+#
 # Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/SeImpersonatePrivilege.md
 
-- name: Install Carbon module for privilege assignment
+- name: Install IIS (Server edition — Install-WindowsFeature)
   ansible.windows.win_shell: |
-    if (-not (Get-Module -ListAvailable -Name Carbon)) {
-      Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null
-      Install-Module -Name Carbon -Force -Scope CurrentUser -AllowClobber
+    Import-Module ServerManager
+    $result = Install-WindowsFeature `
+      -Name Web-Server, Web-ASP, Web-Asp-Net45, Web-Net-Ext45, Web-ISAPI-Ext, Web-ISAPI-Filter `
+      -IncludeManagementTools
+    if (-not $result.Success) {
+      Write-Error "Install-WindowsFeature failed: ExitCode=$($result.ExitCode)"
+      exit 1
     }
+  when: >
+    'server' in (ansible_os_name | default('') | lower) or
+    'server' in (ansible_distribution | default('') | lower)
+  ignore_errors: true
+  register: _iis_server
+
+- name: Install IIS (Windows 10/11 — Enable-WindowsOptionalFeature via DISM)
+  ansible.windows.win_shell: |
+    # Core IIS features — same across Win10/11 builds
+    $coreFeatures = @(
+      "IIS-WebServerRole",
+      "IIS-WebServer",
+      "IIS-CommonHttpFeatures",
+      "IIS-StaticContent",
+      "IIS-DefaultDocument",
+      "IIS-ApplicationDevelopment",
+      "IIS-ISAPIExtensions",
+      "IIS-ISAPIFilter",
+      "IIS-NetFxExtensibility45",
+      "NetFx4-AdvSrvs",
+      "NetFx4Extended-ASPNET45"
+    )
+    foreach ($f in $coreFeatures) {
+      Enable-WindowsOptionalFeature -Online -FeatureName $f -All -NoRestart -ErrorAction SilentlyContinue | Out-Null
+    }
+
+    # IIS-ASPNET45 was removed in Win11 22H2+ — try both names
+    $aspFeatures = @("IIS-ASPNET45", "IIS-ASPNET")
+    foreach ($f in $aspFeatures) {
+      $result = Enable-WindowsOptionalFeature -Online -FeatureName $f -All -NoRestart -ErrorAction SilentlyContinue
+      if ($result.Online -eq $true -or $result -ne $null) { break }
+    }
+
+    # Ensure W3SVC starts on boot (DISM enables features but does not start services)
+    Set-Service -Name W3SVC -StartupType Automatic -ErrorAction SilentlyContinue
+    Start-Service -Name W3SVC -ErrorAction SilentlyContinue
+  when: >
+    'server' not in (ansible_os_name | default('') | lower) and
+    'server' not in (ansible_distribution | default('') | lower)
   ignore_errors: true
 
-- name: Grant SeImpersonatePrivilege to victim user
-  ansible.windows.win_shell: |
-    $cfgFile = "$env:TEMP\seimpersonate_cfg.ini"
-    $dbFile  = "$env:TEMP\seimpersonate_db.sdb"
-
-    if ("{{ ludus_win_privesc_victim_user_type }}" -eq "domain") {
-      $sidEntry = (New-Object System.Security.Principal.NTAccount("{{ ludus_win_privesc_domain | default('') }}\{{ ludus_win_privesc_victim_user }}")).Translate([System.Security.Principal.SecurityIdentifier]).Value
-    } else {
-      $sidEntry = (Get-LocalUser -Name "{{ ludus_win_privesc_victim_user }}").SID.Value
-    }
-
-    & secedit /export /cfg $cfgFile | Out-Null
-    $content = Get-Content $cfgFile
-    $newLine  = "SeImpersonatePrivilege = *$sidEntry"
-    if ($content -match 'SeImpersonatePrivilege') {
-      $content = $content -replace 'SeImpersonatePrivilege\s*=.*', $newLine
-    } else {
-      $privIdx = ($content | Select-String '\[Privilege Rights\]').LineNumber
-      $content = $content[0..($privIdx - 1)] + $newLine + $content[$privIdx..($content.Length - 1)]
-    }
-    $content | Set-Content $cfgFile
-    & secedit /import /cfg $cfgFile /db $dbFile /overwrite /quiet | Out-Null
-    & secedit /configure /db $dbFile /quiet | Out-Null
-    Remove-Item $cfgFile, $dbFile -ErrorAction SilentlyContinue
-
-- name: Install IIS for SeImpersonate web shell scenario
-  ansible.windows.win_shell: |
-    # Use ServerManager on Server editions, DISM on desktop editions
-    $osCaption = (Get-WmiObject Win32_OperatingSystem).Caption
-    if ($osCaption -match "Server") {
-      Import-Module ServerManager
-      Install-WindowsFeature -Name Web-Server, Web-ASP, Web-ASPX -IncludeManagementTools
-    } else {
-      # Windows 10/11 - use DISM
-      $features = @(
-        "IIS-WebServerRole",
-        "IIS-WebServer",
-        "IIS-CommonHttpFeatures",
-        "IIS-StaticContent",
-        "IIS-DefaultDocument",
-        "IIS-ApplicationDevelopment",
-        "IIS-ASPNET45",
-        "IIS-NetFxExtensibility45",
-        "IIS-ISAPIExtensions",
-        "IIS-ISAPIFilter",
-        "NetFx4-AdvSrvs",
-        "NetFx4Extended-ASPNET45"
-      )
-      foreach ($feature in $features) {
-        Enable-WindowsOptionalFeature -Online -FeatureName $feature -All -NoRestart -ErrorAction SilentlyContinue
-      }
-    }
-  ignore_errors: true
+- name: Ensure wwwroot exists before downloading web shell
+  ansible.windows.win_file:
+    path: C:\inetpub\wwwroot
+    state: directory
 
 - name: Download cmdasp.aspx web shell
   ansible.windows.win_get_url:
@@ -80,7 +78,7 @@
     dest: "C:\\inetpub\\wwwroot\\index.html"
     force: true
 
-- name: Ensure IIS is running
+- name: Ensure IIS (W3SVC) is running
   ansible.windows.win_service:
     name: W3SVC
     state: started
@@ -92,4 +90,6 @@
       - "=== SeImpersonatePrivilege Scenario ==="
       - "User '{{ ludus_win_privesc_victim_user }}' has SeImpersonatePrivilege."
       - "IIS web shell: http://<TARGET_IP>/cmdasp.aspx"
-      - "Exploit with: PrintSpoofer64.exe -i -c cmd, or GodPotato, or SweetPotato"
+      - "Exploit: PrintSpoofer64.exe -i -c cmd"
+      - "         GodPotato-NET4.exe -cmd 'cmd /c whoami'"
+      - "         SweetPotato.exe -a '/c whoami'"

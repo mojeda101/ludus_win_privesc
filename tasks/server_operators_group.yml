@@ -1,0 +1,74 @@
+---
+# Server Operators Group Lab Setup
+# "Server Operators" is an Active Directory DOMAIN group.
+# - Only runs on domain-joined machines (when condition in main.yml)
+# - net group /domain requires Domain Admin credentials
+#   → the Ansible WinRM connection user must be a Domain Admin
+#   → in Ludus this is typically the domain Administrator account
+
+# ═══ SCENARIO 22 — Privileged Group: Server Operators (domain-joined only) ═══
+
+- name: Check domain join status before proceeding
+  ansible.windows.win_shell: |
+    $role = (Get-WmiObject Win32_ComputerSystem).DomainRole
+    # DomainRole: 0=Standalone WS, 1=Member WS, 2=Standalone Server,
+    #             3=Member Server, 4=Backup DC, 5=Primary DC
+    # Domain-joined = role 1,3,4,5
+    if ($role -in @(1,3,4,5)) {
+      Write-Output "DOMAIN_JOINED"
+    } else {
+      Write-Output "NOT_DOMAIN_JOINED"
+    }
+  register: _domain_check
+  changed_when: false
+
+- name: Skip Server Operators scenario if not domain-joined
+  ansible.builtin.meta: end_host
+  when: _domain_check.stdout | trim != "DOMAIN_JOINED"
+
+- name: Add victim user to Server Operators domain group
+  ansible.windows.win_shell: |
+    $user   = "{{ ludus_win_privesc_victim_user }}"
+    # Ludus runs Ansible as domain Administrator by default — net group /domain works out of the box
+    $result = net group "Server Operators" "$user" /add /domain 2>&1
+    if ($LASTEXITCODE -eq 0) {
+      Write-Output "OK: added $user to Server Operators"
+    } elseif ($result -match "already a member") {
+      Write-Output "OK: already a member"
+    } else {
+      Write-Error "net group failed (exit $LASTEXITCODE): $result"
+    }
+  register: _server_add
+  failed_when: "'OK' not in _server_add.stdout"
+
+- name: Ensure temp exfil directory exists and is world-writable
+  ansible.windows.win_shell: |
+    New-Item -ItemType Directory -Force -Path "C:\Temp" | Out-Null
+    icacls "C:\Temp" /grant Everyone:F | Out-Null
+
+- name: Validate victim user is member of Server Operators
+  ansible.windows.win_shell: |
+    $result = net group "Server Operators" /domain 2>&1 |
+              Select-String "{{ ludus_win_privesc_victim_user }}"
+    if ($result) { Write-Output "OK" } else { Write-Output "FAIL" }
+  register: _server_operators_validate
+  tags: validate
+
+- name: Assert victim user is in Server Operators group
+  ansible.builtin.fail:
+    msg: >
+      Server Operators scenario validation failed —
+      '{{ ludus_win_privesc_victim_user }}' is not a member of Server Operators.
+      Ludus default: Ansible runs as domain Administrator — check domain connectivity.
+  when: _server_operators_validate.stdout | trim != "OK"
+  tags: validate
+
+- name: Print Server Operators scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== Privileged Group: Server Operators Scenario ==="
+      - "{{ _server_add.stdout | trim }}"
+      - "Domain role: {{ ansible_windows_domain_role }}"
+      - "Exploit: sc config <svc> binpath= C:\\Temp\\evil.exe"
+      - "         sc stop <svc> && sc start <svc>"
+      - "Note: Most impactful on Domain Controllers."

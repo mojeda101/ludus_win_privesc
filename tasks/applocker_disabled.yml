@@ -1,0 +1,115 @@
+---
+# AppLocker Disabled / Weak Policy Lab Setup
+# Deploys a deliberately weak AppLocker configuration using only Default Rules,
+# which allows execution from user-writable paths (e.g. %APPDATA%, %TEMP%,
+# C:\Windows\Tasks) and can be trivially bypassed.
+#
+# Bypass techniques: LOLBAS (mshta, regsvr32, rundll32), writable-path execution,
+#                    InstallUtil, MSBuild, Cscript via trusted paths.
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/AppLocker.md
+
+# ═══ SCENARIO 25 — AppLocker Disabled / Weak Policy ═══
+
+- name: Stop and disable AppIDSvc (Application Identity — required for AppLocker enforcement)
+  ansible.windows.win_shell: |
+    $svc = Get-Service -Name AppIDSvc -ErrorAction SilentlyContinue
+    if (-not $svc) {
+      Write-Output "NOT_INSTALLED"
+      exit 0
+    }
+    # Stop running instance first, then disable
+    if ($svc.Status -eq "Running") {
+      Stop-Service -Name AppIDSvc -Force -ErrorAction SilentlyContinue
+      Start-Sleep -Seconds 2
+    }
+    Set-Service -Name AppIDSvc -StartupType Disabled -ErrorAction SilentlyContinue
+
+    # Verify
+    $svc = Get-Service -Name AppIDSvc -ErrorAction SilentlyContinue
+    if ($svc.StartType -eq "Disabled" -and $svc.Status -ne "Running") {
+      Write-Output "DISABLED"
+    } else {
+      # Force via registry if service cmdlets failed
+      Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\AppIDSvc" `
+        -Name "Start" -Value 4 -Type DWord -ErrorAction SilentlyContinue
+      Write-Output "DISABLED_VIA_REGISTRY"
+    }
+  register: _appidsvc_result
+
+- name: Remove any existing SrpV2 AppLocker policy keys
+  ansible.windows.win_shell: |
+    $srpPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\SrpV2"
+    if (Test-Path $srpPath) {
+      Remove-Item -Path $srpPath -Recurse -Force
+      Write-Output "REMOVED"
+    } else {
+      Write-Output "ABSENT"
+    }
+  register: _applocker_srp_removed
+
+- name: Deploy weak AppLocker Default Rules (optional — user-writable paths allowed)
+  ansible.windows.win_shell: |
+    $srpBase = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\SrpV2"
+    $exeBase = "$srpBase\Exe"
+    New-Item -Path $exeBase -Force | Out-Null
+    Set-ItemProperty -Path $exeBase -Name "EnforcementMode" -Value 1 -Type DWord | Out-Null
+
+    $ruleAdmins = "<FilePathRule Id=""{a61c8b2c-a319-4cd0-9690-d2177cad7b51}"" Name=""All files"" Description="""" UserOrGroupSid=""S-1-5-32-544"" Action=""Allow""><Conditions><FilePathCondition Path=""*""/></Conditions></FilePathRule>"
+    $ruleWinDir = "<FilePathRule Id=""{fd686d83-a829-4351-8ff4-27c7de5755d2}"" Name=""All files in %WINDIR%"" Description="""" UserOrGroupSid=""S-1-1-0"" Action=""Allow""><Conditions><FilePathCondition Path=""%WINDIR%\*""/></Conditions></FilePathRule>"
+    $ruleProgF  = "<FilePathRule Id=""{921cc481-6e17-4653-8f75-050b80acce54}"" Name=""All files in %PROGRAMFILES%"" Description="""" UserOrGroupSid=""S-1-1-0"" Action=""Allow""><Conditions><FilePathCondition Path=""%PROGRAMFILES%\*""/></Conditions></FilePathRule>"
+
+    foreach ($entry in @(
+      @{id="{a61c8b2c-a319-4cd0-9690-d2177cad7b51}"; val=$ruleAdmins},
+      @{id="{fd686d83-a829-4351-8ff4-27c7de5755d2}"; val=$ruleWinDir},
+      @{id="{921cc481-6e17-4653-8f75-050b80acce54}"; val=$ruleProgF}
+    )) {
+      $key = "$exeBase\$($entry.id)"
+      New-Item -Path $key -Force | Out-Null
+      Set-ItemProperty -Path $key -Name "Value" -Type String -Value $entry.val | Out-Null
+    }
+    Write-Output "DEPLOYED"
+  when: ludus_win_privesc_applocker_weak_rules | bool
+
+- name: Validate AppLocker enforcement is off
+  ansible.windows.win_shell: |
+    $svc = Get-Service -Name AppIDSvc -ErrorAction SilentlyContinue
+
+    # Accept: service not installed, disabled, or stopped
+    if (-not $svc) {
+      Write-Output "OK: AppIDSvc not installed"
+    } elseif ($svc.StartType -eq "Disabled") {
+      Write-Output "OK: AppIDSvc disabled"
+    } elseif ($svc.Status -ne "Running") {
+      Write-Output "OK: AppIDSvc stopped (StartType=$($svc.StartType))"
+    } else {
+      # Also check registry — service cmdlets can lag behind
+      $regStart = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\AppIDSvc" `
+        -Name "Start" -ErrorAction SilentlyContinue).Start
+      if ($regStart -eq 4) {
+        Write-Output "OK: AppIDSvc disabled via registry (service may still show running until reboot)"
+      } else {
+        Write-Output "FAIL: AppIDSvc is running and not disabled (StartType=$($svc.StartType))"
+      }
+    }
+  register: _applocker_validate
+  tags: validate
+
+- name: Assert AppLocker is disabled / not enforcing
+  ansible.builtin.fail:
+    msg: >
+      AppLocker scenario validation failed —
+      {{ _applocker_validate.stdout | trim }}
+  when: not (_applocker_validate.stdout | trim).startswith('OK')
+  tags: validate
+
+- name: Print AppLocker scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== AppLocker Disabled / Weak Policy Scenario ==="
+      - "AppIDSvc result: {{ _appidsvc_result.stdout | trim }}"
+      - "SrpV2 keys: {{ _applocker_srp_removed.stdout | trim }}"
+      - "Weak Default Rules deployed: {{ ludus_win_privesc_applocker_weak_rules | bool }}"
+      - "Bypass: Execute from %APPDATA%, %TEMP%, or use LOLBAS:"
+      - "        mshta, regsvr32, rundll32, MSBuild, InstallUtil, Cscript"
+      - "Reference: https://lolbas-project.github.io"

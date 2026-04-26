@@ -1,8 +1,15 @@
 ---
 # UAC Bypass Lab Setup
-# Ensures UAC is enabled at the default level (Prompt for consent).
-# The victim user is added to the local Administrators group but UAC is on,
-# requiring bypass techniques to reach a High integrity process.
+# Creates a dedicated "uacuser" and adds it to local Administrators.
+# UAC is enabled at default level (Prompt for consent).
+#
+# This is intentionally a SEPARATE user from ludus_win_privesc_victim_user
+# so that the victim user (lowpriv) can have token privileges visible
+# without UAC filtering.
+#
+# Lab scenario:
+#   lowpriv  → plain user, NOT in Administrators → whoami /priv shows all privs
+#   uacuser  → local Admin, UAC on → must bypass UAC to reach High Integrity
 #
 # Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/UACBypass.md
 
@@ -14,23 +21,43 @@
     type: dword
     state: present
   loop:
-    - { name: "EnableLUA",             data: 1 }
-    - { name: "ConsentPromptBehaviorAdmin", data: 5 }  # Prompt for non-Windows binaries
-    - { name: "PromptOnSecureDesktop", data: 1 }
+    - { name: "EnableLUA",                  data: 1 }
+    - { name: "ConsentPromptBehaviorAdmin", data: 5 }
+    - { name: "PromptOnSecureDesktop",      data: 1 }
 
-- name: Add victim user to local Administrators (needed for UAC bypass practice)
+- name: Create dedicated UAC bypass lab user (uacuser)
+  ansible.windows.win_user:
+    name: uacuser
+    password: "{{ ludus_win_privesc_uac_password | default('UacBypass123!') }}"
+    password_never_expires: true
+    state: present
+    groups:
+      - Users
+
+- name: Resolve Administrators group name from SID (locale-independent)
+  ansible.windows.win_shell: |
+    $grp = Get-CimInstance -ClassName Win32_Group -Filter 'SID="S-1-5-32-544"' -ErrorAction Stop
+    Write-Output $grp.Name
+  register: _admins_group_name
+  changed_when: false
+
+- name: Add uacuser to local Administrators group (NOT the victim user)
   ansible.windows.win_group_membership:
-    name: Administrators
+    name: "{{ _admins_group_name.stdout | trim }}"
     members:
-      - "{% if ludus_win_privesc_victim_user_type == 'domain' %}{{ ludus_win_privesc_domain | default('') }}\\{{ ludus_win_privesc_victim_user }}{% else %}{{ ludus_win_privesc_victim_user }}{% endif %}"
+      - uacuser
     state: present
 
 - name: Print UAC Bypass scenario info
   ansible.builtin.debug:
     msg:
       - "=== UAC Bypass Scenario ==="
-      - "User '{{ ludus_win_privesc_victim_user }}' is a local admin but UAC is ON."
-      - "Goal: Obtain a High integrity (elevated) process from a Medium integrity shell."
+      - "UAC user : uacuser / {{ ludus_win_privesc_uac_password | default('UacBypass123!') }}"
+      - "uacuser is a local admin → UAC is ON → must bypass to reach High Integrity."
+      - "Victim  : {{ ludus_win_privesc_victim_user }} is NOT in Administrators."
+      - "          → whoami /priv shows all assigned privileges directly."
+      - ""
+      - "Goal: Bypass UAC as uacuser to get elevated shell."
       - "Common bypasses:"
       - "  - fodhelper.exe registry hijack"
       - "  - eventvwr.exe registry hijack"

@@ -1,6 +1,6 @@
 ---
 galaxy_info:
-  author: "YourGithubUsername"
+  author: "mojeda101"
   description: "Ansible Role that configures Windows privilege escalation lab scenarios based on the nickvourd/Windows-Local-Privilege-Escalation-Cookbook"
   license: MIT
   min_ansible_version: "2.9"

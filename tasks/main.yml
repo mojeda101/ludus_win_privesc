@@ -3,32 +3,98 @@
 # Sets up Windows privilege escalation lab scenarios from:
 #   https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook
 
-- name: Disable Windows Defender via scheduled task (runs as SYSTEM to bypass access denied)
+# ── Optional: Windows Defender GUI auf Windows Server installieren ────────────
+# Ermöglicht den manuellen Tamper-Protection-Disable via Windows Security GUI
+# (Start → Windows Security) — identisch zu Win10/11.
+# Nur auf Server-Editionen nötig; auf Win10/11 ist die GUI immer vorhanden.
+# Referenz: https://www.prajwaldesai.com/enable-windows-defender-gui-on-windows-server/
+- name: Install Windows Defender GUI on Server (optional — enables TP manual disable via GUI)
   ansible.windows.win_shell: |
-    $action  = New-ScheduledTaskAction -Execute "powershell.exe" -Argument @"
-    -NonInteractive -WindowStyle Hidden -Command "
-      Set-MpPreference -DisableRealtimeMonitoring `$true;
-      Set-MpPreference -DisableIOAVProtection `$true;
-      Set-MpPreference -DisableBehaviorMonitoring `$true;
-      Set-MpPreference -DisableBlockAtFirstSeen `$true;
-      Set-MpPreference -DisableScriptScanning `$true;
-      Set-MpPreference -MAPSReporting 0;
-      Set-MpPreference -SubmitSamplesConsent 2;
-      Set-MpPreference -DisableArchiveScanning `$true;
-      Set-MpPreference -DisableIntrusionPreventionSystem `$true
-    "
-    "@
-    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-    $settings  = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
-    $task      = Register-ScheduledTask -TaskName "DisableDefender_LPELab" `
-                   -Action $action -Principal $principal -Settings $settings -Force
-    Start-ScheduledTask -TaskName "DisableDefender_LPELab"
-    Start-Sleep -Seconds 10
-    Unregister-ScheduledTask -TaskName "DisableDefender_LPELab" -Confirm:$false
+    # Nur ausführen wenn Install-WindowsFeature verfügbar ist (Server-Edition)
+    if (Get-Command Install-WindowsFeature -ErrorAction SilentlyContinue) {
+      $result = Install-WindowsFeature -Name Windows-Defender-GUI
+      if ($result.Success) {
+        Write-Output "GUI_INSTALLED"
+      } else {
+        Write-Output "GUI_ALREADY_PRESENT_OR_FAILED: $($result.ExitCode)"
+      }
+    } else {
+      Write-Output "NOT_SERVER_EDITION_SKIPPED"
+    }
+  when: ludus_win_privesc_install_defender_gui | bool
+  ignore_errors: true
+  register: _defender_gui_result
+
+- name: Reboot after Defender GUI install (required for GUI to appear)
+  ansible.windows.win_reboot:
+    reboot_timeout: 300
+    post_reboot_delay: 15
+  when:
+    - ludus_win_privesc_install_defender_gui | bool
+    - _defender_gui_result.stdout is defined
+    - "'GUI_INSTALLED' in _defender_gui_result.stdout"
+
+- name: Show Defender GUI install result
+  ansible.builtin.debug:
+    msg:
+      - "Defender GUI install: {{ _defender_gui_result.stdout | default('skipped') | trim }}"
+      - "Nach dem Reboot: Start → Windows Security → Virus & threat protection"
+      - "→ Manage settings → Tamper Protection OFF"
+      - "Dann Rolle erneut ausführen: ludus ansible roles run -n <VM>"
+  when: ludus_win_privesc_install_defender_gui | bool
+
+# ── Defender + Tamper Protection deaktivieren ────────────────────────────────
+# Tamper Protection blockiert direkte Registry-Writes auf Defender-Keys auch
+# mit Admin-Rechten (OpenSubKey → Access Denied). Lösung: Tamper Protection
+# via WMI-Aufruf als SYSTEM deaktivieren — WMI umgeht den Registry-Guard.
+# Danach Policy-Keys setzen und neu starten.
+
+- name: Disable Tamper Protection via WMI as SYSTEM (registry write blocked by TP)
+  ansible.windows.win_shell: |
+    # Prüfen ob Tamper Protection überhaupt aktiv ist
+    # Get-MpComputerStatus verfügbar auf Win10/11/Server 2019+
+    try {
+      $status = Get-MpComputerStatus -ErrorAction Stop
+      $tp = $status.IsTamperProtected
+    } catch {
+      $tp = $null
+    }
+    if ($tp -eq $false -or $tp -eq $null) {
+      Write-Output "TAMPER_ALREADY_OFF"
+      exit 0
+    }
+
+    # CIM/WMI Namespace — Get-CimInstance (Get-WmiObject deprecated in PS7+)
+    $cim = Get-CimInstance -Namespace "root\Microsoft\Windows\Defender" `
+      -ClassName MSFT_MpPreference -ErrorAction SilentlyContinue
+    if ($cim) {
+      Invoke-CimMethod -InputObject $cim -MethodName "Set" `
+        -Arguments @{DisableTamperProtection = $true} -ErrorAction SilentlyContinue | Out-Null
+      Write-Output "CIM_DISABLED"
+      exit 0
+    }
+
+    # Fallback: direkte Registry — schlägt fehl wenn TP aktiv, aber wir
+    # fangen den Fehler ab und fahren fort (ignore_errors greift)
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows Defender\Features" `
+      -Name TamperProtection -Value 0 -Type DWord -ErrorAction Stop
+    Write-Output "REG_DISABLED"
   when: ludus_win_privesc_disable_defender | bool
   ignore_errors: true
+  register: _tp_disable_result
 
-- name: Disable Defender via registry (persistent, survives reboot)
+- name: Show Tamper Protection disable result
+  ansible.builtin.debug:
+    msg: "Tamper Protection disable result: {{ _tp_disable_result.stdout | default('no output') | trim }}"
+  when: ludus_win_privesc_disable_defender | bool
+
+- name: Reboot to deactivate Tamper Protection
+  ansible.windows.win_reboot:
+    reboot_timeout: 300
+    post_reboot_delay: 20
+  when: ludus_win_privesc_disable_defender | bool
+
+- name: Disable Defender via policy registry keys (after reboot, TP should be off)
   ansible.windows.win_regedit:
     path: "{{ item.path }}"
     name: "{{ item.name }}"
@@ -36,14 +102,45 @@
     type: dword
     state: present
   loop:
-    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender',                       name: 'DisableAntiSpyware',        data: 1 }
-    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection', name: 'DisableRealtimeMonitoring', data: 1 }
-    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection', name: 'DisableIOAVProtection',     data: 1 }
-    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection', name: 'DisableBehaviorMonitoring', data: 1 }
-    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Spynet',               name: 'SpynetReporting',           data: 0 }
-    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Spynet',               name: 'SubmitSamplesConsent',      data: 2 }
+    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender',                       name: 'DisableAntiSpyware',          data: 1 }
+    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender',                       name: 'DisableAntiVirus',            data: 1 }
+    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection', name: 'DisableRealtimeMonitoring',   data: 1 }
+    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection', name: 'DisableIOAVProtection',       data: 1 }
+    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection', name: 'DisableBehaviorMonitoring',   data: 1 }
+    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection', name: 'DisableOnAccessProtection',   data: 1 }
+    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection', name: 'DisableScanOnRealtimeEnable', data: 1 }
+    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Spynet',               name: 'SpynetReporting',             data: 0 }
+    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Spynet',               name: 'SubmitSamplesConsent',        data: 2 }
+    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\MpEngine',             name: 'MpEnablePus',                 data: 0 }
   when: ludus_win_privesc_disable_defender | bool
   ignore_errors: true
+
+- name: Stop and disable Defender services immediately (avoid reboot)
+  ansible.windows.win_shell: |
+    $services = @("WinDefend", "WdNisSvc", "SecurityHealthService", "wscsvc")
+    foreach ($svc in $services) {
+      Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue
+      Set-Service  -Name $svc -StartupType Disabled -ErrorAction SilentlyContinue
+    }
+    # Verify WinDefend is actually stopped
+    $status = (Get-Service -Name WinDefend -ErrorAction SilentlyContinue).Status
+    if ($status -eq "Stopped" -or $status -eq $null) {
+      Write-Output "DEFENDER_STOPPED"
+    } else {
+      Write-Output "DEFENDER_RUNNING_REBOOT_NEEDED"
+    }
+  when: ludus_win_privesc_disable_defender | bool
+  register: _defender_stop_result
+  ignore_errors: true
+
+- name: Reboot to apply Defender policy (only if service could not be stopped)
+  ansible.windows.win_reboot:
+    reboot_timeout: 300
+    post_reboot_delay: 20
+  when:
+    - ludus_win_privesc_disable_defender | bool
+    - _defender_stop_result.stdout is defined
+    - "'DEFENDER_RUNNING_REBOOT_NEEDED' in _defender_stop_result.stdout"
 
 
 - name: Create local victim low-privilege user
@@ -56,6 +153,32 @@
       - Users
   when: ludus_win_privesc_victim_user_type == 'local'
 
+- name: Add victim user to Remote Desktop Users (required for RDP when not Administrator)
+  ansible.windows.win_shell: |
+    $grp = Get-CimInstance -ClassName Win32_Group -Filter 'SID="S-1-5-32-555"' -ErrorAction Stop
+    net localgroup "$($grp.Name)" "{{ ludus_win_privesc_victim_user }}" /add 2>$null
+    exit 0
+  when: ludus_win_privesc_victim_user_type == 'local'
+
+# Domain user creation — runs on DC, creates lowpriv in AD
+# Only executes when victim_user_type == 'domain', create_domain_user == true,
+# and the current host is a DC (ansible_windows_domain_role).
+- name: Include domain victim user creation (DC only)
+  ansible.builtin.include_tasks: create_domain_user.yml
+  when:
+    - ludus_win_privesc_victim_user_type == 'domain'
+    - ludus_win_privesc_create_domain_user | bool
+    - ansible_windows_domain_role is defined
+    - "'domain_controller' in ansible_windows_domain_role | lower"
+
+- name: Add domain victim user to local Remote Desktop Users group
+  ansible.windows.win_shell: |
+    $grp = Get-CimInstance -ClassName Win32_Group -Filter 'SID="S-1-5-32-555"' -ErrorAction Stop
+    $member = "{{ ludus_win_privesc_domain | default('') }}\\{{ ludus_win_privesc_victim_user }}"
+    net localgroup "$($grp.Name)" "$member" /add 2>$null
+    exit 0
+  when: ludus_win_privesc_victim_user_type == 'domain'
+
 
 
 - name: Enable local Administrator account and set password
@@ -66,11 +189,26 @@
     state: present
 
 # ── Privilege Token Scenarios ─────────────────────────────────────────────────
-- name: Include SeImpersonatePrivilege scenario
+# All Se*Privileges are granted in a SINGLE secedit pass followed by ONE reboot.
+# This avoids N individual reboots when multiple privileges are enabled.
+- name: Grant all enabled Se*Privileges (single secedit pass + one reboot)
+  ansible.builtin.include_tasks: grant_secedit_privs.yml
+  when: >
+    ludus_win_privesc_seimpersonate   | bool or
+    ludus_win_privesc_sebackup        | bool or
+    ludus_win_privesc_sedebug         | bool or
+    ludus_win_privesc_serestore       | bool or
+    ludus_win_privesc_setakeownership | bool or
+    ludus_win_privesc_seloaddriver    | bool or
+    ludus_win_privesc_semanagevolume  | bool
+
+# Scenario-specific artifact tasks run AFTER the combined reboot
+# (IIS setup, test files, artifacts — no secedit/reboot needed here)
+- name: Include SeImpersonatePrivilege scenario (IIS webshell setup)
   ansible.builtin.include_tasks: seimpersonate.yml
   when: ludus_win_privesc_seimpersonate | bool
 
-- name: Include SeBackupPrivilege scenario
+- name: Include SeBackupPrivilege scenario (exfil dir setup)
   ansible.builtin.include_tasks: sebackup.yml
   when: ludus_win_privesc_sebackup | bool
 
@@ -125,3 +263,71 @@
 - name: Include UAC Bypass Setup scenario
   ansible.builtin.include_tasks: uac_bypass_setup.yml
   when: ludus_win_privesc_uac_bypass_setup | bool
+
+# ── Token Privilege Artifact Tasks (Group A) ──────────────────────────────────
+# Privileges already granted above via grant_secedit_privs.yml
+# These tasks only deploy scenario-specific artifacts/test files
+- name: Include SeDebugPrivilege scenario (artifacts)
+  ansible.builtin.include_tasks: sedebug.yml
+  when: ludus_win_privesc_sedebug | bool
+
+- name: Include SeRestorePrivilege scenario (artifacts)
+  ansible.builtin.include_tasks: serestore.yml
+  when: ludus_win_privesc_serestore | bool
+
+- name: Include SeTakeOwnershipPrivilege scenario (artifacts)
+  ansible.builtin.include_tasks: setakeownership.yml
+  when: ludus_win_privesc_setakeownership | bool
+
+- name: Include SeLoadDriverPrivilege scenario (artifacts)
+  ansible.builtin.include_tasks: seloaddriver.yml
+  when: ludus_win_privesc_seloaddriver | bool
+
+- name: Include SeManageVolumePrivilege scenario (artifacts)
+  ansible.builtin.include_tasks: semanagevolume.yml
+  when: ludus_win_privesc_semanagevolume | bool
+
+- name: Include Backup Operators group scenario
+  ansible.builtin.include_tasks: backup_operators_group.yml
+  when: ludus_win_privesc_backup_operators_group | bool
+
+- name: Include Server Operators group scenario (domain-joined only — group does not exist on standalone)
+  ansible.builtin.include_tasks: server_operators_group.yml
+  when:
+    - ludus_win_privesc_server_operators_group | bool
+    - ansible_windows_domain_role is defined
+    - ansible_windows_domain_role | lower in ["member_server", "primary_domain_controller", "backup_domain_controller"]
+
+# ── Security Config / Registry Scenarios (Group B) ───────────────────────────
+- name: Include WDigest Enabled scenario
+  ansible.builtin.include_tasks: wdigest_enabled.yml
+  when: ludus_win_privesc_wdigest_enabled | bool
+
+- name: Include WSUS over HTTP scenario
+  ansible.builtin.include_tasks: wsus_http.yml
+  when: ludus_win_privesc_wsus_http | bool
+
+- name: Include AppLocker Disabled scenario
+  ansible.builtin.include_tasks: applocker_disabled.yml
+  when: ludus_win_privesc_applocker_disabled | bool
+
+# ── Path / File Scenarios (Group C) ───────────────────────────────────────────
+- name: Include DLL Hijacking via PATH scenario
+  ansible.builtin.include_tasks: dll_hijacking_path.yml
+  when: ludus_win_privesc_dll_hijacking_path | bool
+
+- name: Include GPP Cached Password scenario
+  ansible.builtin.include_tasks: gpp_cpassword.yml
+  when: ludus_win_privesc_gpp_cpassword | bool
+
+- name: Include WiFi Profile scenario
+  ansible.builtin.include_tasks: wifi_profile.yml
+  when: ludus_win_privesc_wifi_profile | bool
+
+- name: Include SSH Private Key Discovery scenario
+  ansible.builtin.include_tasks: ssh_private_keys.yml
+  when: ludus_win_privesc_ssh_private_keys | bool
+
+- name: Include Office Documents with Credentials scenario
+  ansible.builtin.include_tasks: office_creds.yml
+  when: ludus_win_privesc_office_creds | bool

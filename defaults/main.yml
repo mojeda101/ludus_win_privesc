@@ -3,6 +3,15 @@
 # WARNING: Only use in lab environments!
 ludus_win_privesc_disable_defender: true
 
+# Install the Windows Defender GUI on Windows Server (optional).
+# The GUI is not installed by default on Server — enabling this allows you to
+# disable Tamper Protection manually via the Windows Security interface,
+# just like on Windows 10/11. Triggers a reboot after install.
+# Requires: Server 2016/2019/2022, PowerShell as Admin (WinRM handles this).
+# Command used: Install-WindowsFeature -Name Windows-Defender-GUI
+# Reference: https://www.prajwaldesai.com/enable-windows-defender-gui-on-windows-server/
+ludus_win_privesc_install_defender_gui: false
+
 # Create a low-privilege victim user for escalation exercises
 # Set ludus_win_privesc_victim_user_type to 'local' or 'domain'
 # For 'domain': the user must already exist in Active Directory
@@ -13,6 +22,17 @@ ludus_win_privesc_victim_password: "Password123!"  # only used for local user cr
 # Domain settings (only needed when victim_user_type is 'domain')
 # Auto-detects NetBIOS domain name from the machine's domain membership if not set
 ludus_win_privesc_domain: "{{ ansible_domain.split('.')[0] | upper if ansible_domain is defined and ansible_domain else '' }}"
+
+# Full FQDN of the domain
+ludus_win_privesc_domain_fqdn: "lab.local"
+
+# Automatically create the victim user in Active Directory when victim_user_type == 'domain'
+# Requires: the play must also target the DC (see ludus-range-config-domain.yml)
+ludus_win_privesc_create_domain_user: true
+
+# Optional OU path (Distinguished Name). Empty = default Users container.
+# Example: "OU=LabUsers,DC=lab,DC=local"
+ludus_win_privesc_victim_ou: ""
 
 # Privileged / Administrator account credentials used in credential-leak scenarios
 # (stored creds, PS history, git leaks, answer files, etc.)
@@ -67,7 +87,69 @@ ludus_win_privesc_weak_registry_run_key: true
 # Enables UAC (scenario requires a medium-integrity shell to practice bypass)
 ludus_win_privesc_uac_bypass_setup: true
 
+# Reboot after Se*Privilege grant — set to false for faster deployment.
+# false: LSA API validation still works, but "whoami /priv" in a new RDP session
+#        will NOT yet show the privileges (token only updated on next logon).
+# true:  Full reboot ensures whoami /priv works immediately after deployment.
+ludus_win_privesc_reboot_after_privs: true
+
 # Enumeration tool installation
 # Set to false - tools must be transferred manually to the target
 ludus_win_privesc_install_enum_tools: false
 ludus_win_privesc_tools_path: "C:\\Tools\\PrivEsc"
+
+# ─── Token Privilege Scenarios (Group A) ─────────────────────────────────────
+# Grants SeDebugPrivilege — open handles to LSASS, dump credentials
+ludus_win_privesc_sedebug: true
+
+# Grants SeRestorePrivilege — overwrite system files regardless of ACLs
+ludus_win_privesc_serestore: true
+
+# Grants SeTakeOwnershipPrivilege — take ownership of any file/registry key
+ludus_win_privesc_setakeownership: true
+
+# Grants SeLoadDriverPrivilege — load arbitrary kernel drivers (e.g. Capcom.sys)
+ludus_win_privesc_seloaddriver: true
+
+# Grants SeManageVolumePrivilege — raw volume access to read SAM/SYSTEM off disk
+ludus_win_privesc_semanagevolume: true
+
+# Adds victim user to local Backup Operators group (SeBackup+SeRestore auto-granted)
+ludus_win_privesc_backup_operators_group: true
+
+# Adds victim user to Server Operators group (SID S-1-5-32-549).
+# Group exists on all Windows machines — most impactful on Domain Controllers
+# where members can start/stop services. Works on member servers too.
+ludus_win_privesc_server_operators_group: true
+
+# ─── Security Config / Registry Scenarios (Group B) ──────────────────────────
+# Sets WDigest UseLogonCredential=1 — plaintext creds cached in LSASS
+ludus_win_privesc_wdigest_enabled: true
+
+# Sets WSUS server to HTTP — vulnerable to MITM update injection
+ludus_win_privesc_wsus_http: true
+
+# Disables AppLocker enforcement (AppIDSvc) and optionally deploys weak Default Rules
+ludus_win_privesc_applocker_disabled: true
+# Set to true to also deploy weak AppLocker Default Rules (bypassable via %APPDATA% etc.)
+ludus_win_privesc_applocker_weak_rules: false
+
+# ─── Path / File Scenarios (Group C) ─────────────────────────────────────────
+# Creates a writable directory in SYSTEM PATH for DLL hijacking
+ludus_win_privesc_dll_hijacking_path: true
+# Directory to create and add to SYSTEM PATH
+ludus_win_privesc_dll_hijack_dir: "C:\\DevUtils"
+
+# Drops a fake Groups.xml with AES-encrypted GPP password (cpassword)
+ludus_win_privesc_gpp_cpassword: true
+
+# Deploys a fake WiFi profile XML with cleartext keyMaterial
+ludus_win_privesc_wifi_profile: true
+
+# Drops unprotected SSH private keys in common locations (.ssh dirs, C:\Temp)
+# and an SSH config + known_hosts revealing internal network topology
+ludus_win_privesc_ssh_private_keys: true
+
+# Drops Office documents (.docx, .csv, .txt) with plaintext credentials
+# in realistic locations (Desktop, C:\IT, Public\Documents)
+ludus_win_privesc_office_creds: true

@@ -1,0 +1,235 @@
+---
+# Office Documents with Embedded Credentials Lab Setup
+# Creates realistic Office documents (.docx, .xlsx, .txt, .csv) containing
+# plaintext credentials in common locations attackers look for:
+#   - Word document with "Passwort" / "Password" table
+#   - Excel sheet with credentials list
+#   - Plaintext password file (Passwörter.txt)
+#   - CSV export from a password manager / AD tool
+#   - IT notes with server credentials
+#
+# All documents are dropped in realistic locations:
+#   - Desktop of victim and admin user
+#   - C:\Share, C:\IT, C:\Users\Public\Documents
+#
+# Detection: keyword search in files:
+#   findstr /si "password passwort kennwort" *.txt *.doc *.docx *.xls *.xlsx *.csv
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook
+
+# ═══ SCENARIO 30 — Office Documents with Embedded Credentials ═══
+
+- name: Create IT share directory (world-readable)
+  ansible.windows.win_file:
+    path: "C:\\IT"
+    state: directory
+
+- name: Set IT share world-readable
+  ansible.windows.win_acl:
+    path: C:\IT
+    user: Everyone
+    rights: Read
+    type: allow
+    state: present
+    inherit: ContainerInherit, ObjectInherit
+    propagation: None
+
+- name: Create Public Documents directory
+  ansible.windows.win_file:
+    path: "C:\\Users\\Public\\Documents"
+    state: directory
+
+- name: Create victim Desktop directory (may not exist before first logon)
+  ansible.windows.win_file:
+    path: "C:\\Users\\{{ ludus_win_privesc_victim_user }}\\Desktop"
+    state: directory
+
+# ── Plaintext password files ──────────────────────────────────────────────────
+
+- name: Drop Passwoerter.txt on victim Desktop
+  ansible.windows.win_copy:
+    content: |
+      Passwörter - Stand 2024-01
+      ==========================
+
+      Server / Systeme
+      ----------------
+      Administrator   : {{ ludus_win_privesc_admin_password }}
+      lowpriv         : {{ ludus_win_privesc_victim_password }}
+      SQL Server SA   : Sql$Admin2024!
+      Backup-Account  : B@ckup2023sicher
+
+      Netzwerk
+      --------
+      Router Admin    : router@lab123
+      WLAN LabNetwork : LabWifiSecret99!
+      WLAN Gast       : Gast2024!
+
+      Dienste
+      -------
+      WSUS            : wsus_svc_P@ss!
+      Monitoring      : mon!tor2024
+    dest: "C:\\Users\\{{ ludus_win_privesc_victim_user }}\\Desktop\\Passwoerter.txt"
+
+- name: Drop IT-Server-Credentials.txt in C:\IT
+  ansible.windows.win_copy:
+    content: |
+      =====================================
+       IT Server Credentials - INTERNAL
+      =====================================
+      Last updated: 2024-03-15 | IT-Team
+
+      WINDOWS HOSTS
+      -------------
+      Host            : WIN2022.lab.local
+      Admin User      : {{ ludus_win_privesc_admin_user }}
+      Admin Password  : {{ ludus_win_privesc_admin_password }}
+      RDP Port        : 3389
+
+      Host            : DC01.lab.local
+      Admin User      : Administrator
+      Admin Password  : DC@dmin2024!
+      Domain          : lab.local
+
+      LINUX HOSTS
+      -----------
+      Host            : linuxdev.lab.local (10.10.10.30)
+      Root Password   : Tux$ecure2024
+      SSH Key         : C:\Temp\backup_jumpbox_key
+
+      DATABASES
+      ---------
+      SQL Server      : db.lab.local,1433
+      SA Password     : Sql$Admin2024!
+      App DB User     : appuser / App@DB2023
+
+      SERVICES
+      --------
+      Veeam Backup    : veeam_svc / V33m@Backup!
+      Monitoring      : svc_monitor / Mon!t0r2024
+      WSUS Service    : svc_wsus / wsus_svc_P@ss!
+    dest: "C:\\IT\\IT-Server-Credentials.txt"
+
+- name: Drop credentials CSV (fake password manager export)
+  ansible.windows.win_copy:
+    content: |
+      name,url,username,password,notes
+      "Lab DC01","rdp://dc01.lab.local","Administrator","DC@dmin2024!","Domain Controller"
+      "SQL Server","mssql://db.lab.local","sa","Sql$Admin2024!","Production DB"
+      "WIN2022 Admin","rdp://10.10.10.50","Administrator","{{ ludus_win_privesc_admin_password }}","PrivEsc Lab"
+      "Veeam Backup","https://veeam.lab.local","veeam_svc","V33m@Backup!","Backup server"
+      "WSUS","http://wsus.lab.local:8530","svc_wsus","wsus_svc_P@ss!","Update server"
+      "Linux Dev","ssh://10.10.10.30","root","Tux$ecure2024","Dev server"
+      "WiFi Lab","","","LabWifiSecret99!","SSID: LabNetwork"
+    dest: "C:\\Users\\Public\\Documents\\passwords_export.csv"
+
+- name: Drop IT notes .txt in Public Documents
+  ansible.windows.win_copy:
+    content: |
+      IT Onboarding Notes
+      ===================
+      Erstellt von: IT-Team | 2024-01-10
+
+      Standard-Passwörter Neuinstallation
+      ------------------------------------
+      Windows Admin : {{ ludus_win_privesc_admin_password }}
+      Domain Join   : DomainJoin2024!
+      Service Accts : Svc@2024Standard!
+
+      WICHTIG: Passwörter nach Einrichtung ändern!
+      (Reminder wurde abgehakt, Änderung ausstehend)
+
+      Zugang Infrastruktur
+      --------------------
+      Proxmox Host  : root / Prox@2024!
+      vCenter       : administrator@vsphere.local / vSphere2024!
+      Firewall      : admin / Fw@llP@ss2024
+
+      Notfall-Zugang
+      --------------
+      Break-Glass Admin: bgadmin / Br3@kGl@ss!!
+    dest: "C:\\Users\\Public\\Documents\\IT-Notizen.txt"
+
+# ── Open XML .docx (kein Word benötigt — Pure PowerShell) ────────────────────
+
+- name: Copy pre-built Server-Zugangsdaten.docx to target
+  ansible.windows.win_copy:
+    src: Server-Zugangsdaten.docx
+    dest: C:\IT\Server-Zugangsdaten.docx
+    force: false
+
+- name: Inject admin password into docx word/document.xml
+  ansible.windows.win_shell: |
+    # The docx is a ZIP — extract word/document.xml, replace placeholder, repack
+    Add-Type -Assembly System.IO.Compression.FileSystem
+    $docPath = "C:\IT\Server-Zugangsdaten.docx"
+    $tmp     = "$env:TEMP\docx_patch"
+    Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($docPath, $tmp)
+
+    $xmlPath = "$tmp\word\document.xml"
+    $xml = [System.IO.File]::ReadAllText($xmlPath)
+    $xml = $xml.Replace("PLACEHOLDER_ADMIN_PASSWORD", "{{ ludus_win_privesc_admin_password }}")
+    [System.IO.File]::WriteAllText($xmlPath, $xml, [System.Text.Encoding]::UTF8)
+
+    Remove-Item $docPath -Force
+    [System.IO.Compression.ZipFile]::CreateFromDirectory($tmp, $docPath)
+    Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Output "PATCHED"
+
+- name: Create Excel-like CSV with .xlsx extension (readable by Excel, no install needed)
+  ansible.windows.win_copy:
+    content: |
+      Bereich,System,Benutzer,Passwort,Bemerkung
+      Windows,WIN2022.lab.local,Administrator,{{ ludus_win_privesc_admin_password }},PrivEsc Lab
+      Windows,DC01.lab.local,Administrator,DC@dmin2024!,Domain Controller
+      Datenbank,db.lab.local,sa,Sql$Admin2024!,SQL Server SA
+      Backup,veeam.lab.local,veeam_svc,V33m@Backup!,Veeam Backup Server
+      Linux,10.10.10.30,root,Tux$ecure2024,Dev Server
+      Netzwerk,router.lab.local,admin,router@lab123,Netzwerk-Router
+      Dienst,wsus.lab.local,svc_wsus,wsus_svc_P@ss!,WSUS Server
+    dest: "C:\\Users\\{{ ludus_win_privesc_victim_user }}\\Desktop\\Passwort-Liste.csv"
+
+- name: Validate credential documents exist in expected locations
+  ansible.windows.win_shell: |
+    $files = @(
+      "C:\Users\{{ ludus_win_privesc_victim_user }}\Desktop\Passwoerter.txt",
+      "C:\IT\IT-Server-Credentials.txt",
+      "C:\IT\Server-Zugangsdaten.docx",
+      "C:\Users\Public\Documents\passwords_export.csv",
+      "C:\Users\Public\Documents\IT-Notizen.txt",
+      "C:\Users\{{ ludus_win_privesc_victim_user }}\Desktop\Passwort-Liste.csv"
+    )
+    $missing = $files | Where-Object { -not (Test-Path $_) }
+    if ($missing) {
+      Write-Output "FAIL: $($missing -join ', ')"
+    } else {
+      Write-Output "OK"
+    }
+  register: _office_creds_validate
+  tags: validate
+
+- name: Assert office credential documents are configured correctly
+  ansible.builtin.fail:
+    msg: >
+      Office credentials scenario validation failed —
+      {{ _office_creds_validate.stdout | trim }}
+  when: not (_office_creds_validate.stdout | trim).startswith('OK')
+  tags: validate
+
+- name: Print Office Documents with Credentials scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== Office Documents with Embedded Credentials Scenario ==="
+      - "Files deployed:"
+      - "  C:\\Users\\{{ ludus_win_privesc_victim_user }}\\Desktop\\Passwoerter.txt"
+      - "  C:\\Users\\{{ ludus_win_privesc_victim_user }}\\Desktop\\Passwort-Liste.csv"
+      - "  C:\\IT\\IT-Server-Credentials.txt        (Everyone:R)"
+      - "  C:\\IT\\Server-Zugangsdaten.docx          (Everyone:R, Open XML)"
+      - "  C:\\Users\\Public\\Documents\\passwords_export.csv"
+      - "  C:\\Users\\Public\\Documents\\IT-Notizen.txt"
+      - "Enumerate (als lowpriv):"
+      - "  findstr /si \"password passwort kennwort\" C:\\*.txt C:\\IT\\*.* C:\\Users\\Public\\**"
+      - "  dir /s /b C:\\IT C:\\Users\\Public\\Documents C:\\Users\\{{ ludus_win_privesc_victim_user }}\\Desktop"
+      - '  Get-ChildItem -Recurse C:\ -Include *.txt,*.csv,*.docx,*.xlsx 2>$null |'
+      - "    Select-String -Pattern 'password|passwort|kennwort' -CaseSensitive:$false" 

@@ -1,0 +1,86 @@
+---
+# WSUS over HTTP Lab Setup
+# Configures the machine to use an HTTP (non-TLS) WSUS server.
+# An attacker on the same network can MITM the update channel and push a
+# malicious "update" binary that executes as SYSTEM.
+#
+# Detection: check HKLM\SOFTWARE\Policies\...\WindowsUpdate\WUServer registry value
+#
+# Exploit: SharpWSUS.exe create /payload:"C:\evil.exe" /args:"-i -s"
+#          WSUSpendu — inject fake update into the HTTP WSUS stream
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/WSUS.md
+
+# ═══ SCENARIO 24 — WSUS over HTTP (no TLS) ═══
+
+- name: Create WindowsUpdate policy registry key
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate
+    state: present
+
+- name: Create WindowsUpdate AU policy registry key
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU
+    state: present
+
+- name: Set WSUS server to HTTP (vulnerable to MITM)
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate
+    name: WUServer
+    data: "http://wsus.lab.local:8530"
+    type: string
+    state: present
+
+- name: Set WSUS status server to HTTP
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate
+    name: WUStatusServer
+    data: "http://wsus.lab.local:8530"
+    type: string
+    state: present
+
+- name: Enable UseWUServer to activate the WSUS policy
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU
+    name: UseWUServer
+    data: 1
+    type: dword
+    state: present
+
+- name: Validate WUServer registry value is set to HTTP URL
+  ansible.windows.win_reg_stat:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate
+    name: WUServer
+  register: _wsus_wuserver
+  tags: validate
+
+- name: Validate UseWUServer is enabled
+  ansible.windows.win_reg_stat:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU
+    name: UseWUServer
+  register: _wsus_usewuserver
+  tags: validate
+
+- name: Assert WSUS HTTP scenario is configured correctly
+  ansible.builtin.fail:
+    msg: >
+      WSUS HTTP scenario validation failed —
+      WUServer='{{ _wsus_wuserver.value | default("missing") }}',
+      UseWUServer={{ _wsus_usewuserver.value | default("missing") }}.
+      Expected WUServer starting with 'http://' and UseWUServer=1.
+  when: >
+    not _wsus_wuserver.exists or
+    not (_wsus_wuserver.value | string).startswith('http://') or
+    not _wsus_usewuserver.exists or
+    _wsus_usewuserver.value != 1
+  tags: validate
+
+- name: Print WSUS HTTP scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== WSUS over HTTP Scenario ==="
+      - "WUServer: http://wsus.lab.local:8530 (HTTP — no TLS, MITM possible)"
+      - "UseWUServer: 1"
+      - "Exploit: SharpWSUS / WSUSpendu to inject malicious update executed as SYSTEM."
+      - "Tool: https://github.com/nettitude/SharpWSUS"
+      - "      https://github.com/AlsidOfficial/WSUSpendu"

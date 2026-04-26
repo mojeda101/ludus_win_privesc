@@ -1,0 +1,78 @@
+---
+# WiFi Profile with Saved Password Lab Setup
+# Deploys a fake WLAN profile XML to the Wlansvc profiles directory.
+# Contains a fake SSID with a keyMaterial field (cleartext key in XML on disk).
+#
+# Detection: enumerate Wlansvc profile XML files for keyMaterial field
+#
+# On real systems: netsh wlan show profile <SSID> key=clear
+#                  or parse XML directly from profile directory
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/WiFiPasswords.md
+
+# ═══ SCENARIO 28 — WiFi Profile with Saved Password ═══
+
+- name: Create Wlansvc profiles interface directory
+  ansible.windows.win_file:
+    path: 'C:\ProgramData\Microsoft\Wlansvc\Profiles\Interfaces\{12345678-1234-1234-1234-123456789ABC}'
+    state: directory
+
+- name: Deploy fake WiFi profile XML with saved password
+  ansible.windows.win_copy:
+    content: |
+      <?xml version="1.0"?>
+      <WLANProfile xmlns="http://www.microsoft.com/networking/WLAN/profile/v1">
+        <name>LabNetwork</name>
+        <SSIDConfig>
+          <SSID>
+            <hex>4c61624e6574776f726b</hex>
+            <name>LabNetwork</name>
+          </SSID>
+          <nonBroadcast>false</nonBroadcast>
+        </SSIDConfig>
+        <connectionType>ESS</connectionType>
+        <connectionMode>auto</connectionMode>
+        <MSM>
+          <security>
+            <authEncryption>
+              <authentication>WPA2PSK</authentication>
+              <encryption>AES</encryption>
+              <useOneX>false</useOneX>
+            </authEncryption>
+            <sharedKey>
+              <keyType>passPhrase</keyType>
+              <protected>false</protected>
+              <keyMaterial>LabWifiSecret99!</keyMaterial>
+            </sharedKey>
+          </security>
+        </MSM>
+      </WLANProfile>
+    dest: 'C:\ProgramData\Microsoft\Wlansvc\Profiles\Interfaces\{12345678-1234-1234-1234-123456789ABC}\{AAAABBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF}.xml'
+
+- name: Validate WiFi profile XML exists and contains keyMaterial
+  ansible.windows.win_shell: |
+    $profileDir = "C:\ProgramData\Microsoft\Wlansvc\Profiles\Interfaces"
+    $found = Get-ChildItem -Path $profileDir -Recurse -Filter "*.xml" -ErrorAction SilentlyContinue |
+             Where-Object { (Get-Content $_.FullName -Raw) -match 'keyMaterial' }
+    if ($found) { Write-Output "OK" } else { Write-Output "FAIL" }
+  register: _wifi_validate
+  tags: validate
+
+- name: Assert WiFi profile scenario is configured correctly
+  ansible.builtin.fail:
+    msg: >
+      WiFi profile scenario validation failed —
+      No XML profile with a keyMaterial field found under
+      C:\ProgramData\Microsoft\Wlansvc\Profiles\Interfaces\.
+  when: _wifi_validate.stdout | trim != "OK"
+  tags: validate
+
+- name: Print WiFi profile scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== WiFi Profile with Saved Password Scenario ==="
+      - "Profile: C:\\ProgramData\\Microsoft\\Wlansvc\\Profiles\\Interfaces\\{...}\\{...}.xml"
+      - "SSID: LabNetwork"
+      - "keyMaterial (cleartext): LabWifiSecret99!"
+      - "Exploit: Parse XML directly, or:"
+      - "         netsh wlan show profile LabNetwork key=clear"

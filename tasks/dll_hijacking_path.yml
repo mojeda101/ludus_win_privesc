@@ -1,0 +1,88 @@
+---
+# DLL Hijacking via Writable PATH Directory Lab Setup
+# Creates a writable directory and injects it into the SYSTEM PATH.
+# A victim user with write access to this directory can drop a DLL that
+# gets loaded by a privileged process searching the PATH.
+#
+# Detection: enumerate PATH directories for write access
+#
+# Exploit: Drop malicious <target>.dll into C:\DevUtils\
+#          Trigger privileged process that loads that DLL name from PATH.
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/DLLHijacking.md
+
+# ═══ SCENARIO 26 — DLL Hijacking via Writable PATH Directory ═══
+
+- name: Create writable directory for DLL hijacking
+  ansible.windows.win_file:
+    path: "{{ ludus_win_privesc_dll_hijack_dir }}"
+    state: directory
+
+- name: Grant victim user write access to the hijackable directory
+  ansible.windows.win_shell: |
+    cmd /c icacls "{{ ludus_win_privesc_dll_hijack_dir }}" /grant "{{ ludus_win_privesc_victim_user }}:(OI)(CI)W"
+    cmd /c icacls "{{ ludus_win_privesc_dll_hijack_dir }}" /grant "{{ ludus_win_privesc_victim_user }}:(OI)(CI)M"
+
+- name: Add writable directory to SYSTEM PATH (registry)
+  ansible.windows.win_shell: |
+    $regPath  = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+    $current  = (Get-ItemProperty -Path $regPath -Name "Path").Path
+    $newDir   = "{{ ludus_win_privesc_dll_hijack_dir }}"
+
+    # Idempotent: only add if not already present
+    if ($current -notlike "*$newDir*") {
+      $newPath = $current.TrimEnd(";") + ";$newDir"
+      Set-ItemProperty -Path $regPath -Name "Path" -Value $newPath
+      # Broadcast WM_SETTINGCHANGE so Explorer picks it up
+      [System.Environment]::SetEnvironmentVariable("Path", $newPath, "Machine")
+      Write-Output "ADDED"
+    } else {
+      Write-Output "ALREADY_PRESENT"
+    }
+
+- name: Drop a README in the hijackable directory as lab marker
+  ansible.windows.win_copy:
+    content: |
+      DLL Hijacking Lab Directory
+      ===========================
+      This directory is in the SYSTEM PATH and is writable by {{ ludus_win_privesc_victim_user }}.
+
+      Drop a malicious DLL here that matches a DLL name searched by a privileged process.
+      Common targets: version.dll, wbemcomn.dll, cryptbase.dll
+
+      Detection: enumerate PATH directories for write access
+    dest: "{{ ludus_win_privesc_dll_hijack_dir }}\\README_DLLHIJACK.txt"
+
+- name: Validate writable directory is present and in SYSTEM PATH
+  ansible.windows.win_shell: |
+    $regPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+    $syspath = (Get-ItemProperty -Path $regPath -Name "Path").Path
+    $dir     = "{{ ludus_win_privesc_dll_hijack_dir }}"
+
+    if (-not (Test-Path $dir)) {
+      Write-Output "FAIL_NODIR"
+    } elseif ($syspath -notlike "*$dir*") {
+      Write-Output "FAIL_NOTINPATH"
+    } else {
+      Write-Output "OK"
+    }
+  register: _dllhijack_validate
+  tags: validate
+
+- name: Assert DLL hijacking PATH scenario is configured correctly
+  ansible.builtin.fail:
+    msg: >
+      DLL hijacking PATH scenario validation failed (result: {{ _dllhijack_validate.stdout | trim }}) —
+      either '{{ ludus_win_privesc_dll_hijack_dir }}' does not exist or is not in SYSTEM PATH.
+  when: _dllhijack_validate.stdout | trim != "OK"
+  tags: validate
+
+- name: Print DLL hijacking PATH scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== DLL Hijacking via Writable PATH Directory Scenario ==="
+      - "Writable dir: {{ ludus_win_privesc_dll_hijack_dir }} (writable by {{ ludus_win_privesc_victim_user }})"
+      - "SYSTEM PATH: updated to include {{ ludus_win_privesc_dll_hijack_dir }}"
+      - "Exploit: Drop <target>.dll into {{ ludus_win_privesc_dll_hijack_dir }}"
+      - "         Trigger privileged process that searches PATH for that DLL."
+      - "Find candidates: Process Monitor → filter on PATH NOT FOUND + .dll"

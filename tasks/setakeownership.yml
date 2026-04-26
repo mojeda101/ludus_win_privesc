@@ -1,0 +1,39 @@
+---
+# SeTakeOwnershipPrivilege Lab Setup
+# Grants SeTakeOwnershipPrivilege to the victim user, allowing them to take
+# ownership of any file or registry key regardless of the current ACL.
+#
+# Exploit: takeown /F C:\Windows\System32\<target> /A
+#          icacls C:\Windows\System32\<target> /grant <victim>:F
+#          Replace with malicious payload, trigger execution.
+#
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/SeTakeOwnershipPrivilege.md
+
+# ═══ SCENARIO 18 — SeTakeOwnershipPrivilege ═══
+
+- name: Create protected target file that victim cannot access normally
+  ansible.windows.win_shell: |
+    $target = "C:\setakeown_protected.txt"
+    if (-not (Test-Path $target)) {
+      Set-Content -Path $target -Value "Protected file — use SeTakeOwnershipPrivilege to take ownership and read/write."
+      # Strip all non-SYSTEM/Admin ACEs so the victim has no access
+      icacls $target /inheritance:r /grant:r "SYSTEM:(F)" /grant:r "Administrators:(F)" | Out-Null
+    }
+
+- name: Create protected registry key that victim cannot access normally
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\SeTakeOwnTest
+    name: SecretValue
+    data: "TakeOwnershipToReadMe"
+    type: string
+    state: present
+
+- name: Print SeTakeOwnershipPrivilege scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== SeTakeOwnershipPrivilege Scenario ==="
+      - "User '{{ ludus_win_privesc_victim_user }}' has SeTakeOwnershipPrivilege."
+      - "Protected file: C:\\setakeown_protected.txt (SYSTEM/Admins only)"
+      - "Protected reg:  HKLM:\\SOFTWARE\\SeTakeOwnTest"
+      - "Exploit: takeown /F C:\\setakeown_protected.txt"
+      - "         icacls C:\\setakeown_protected.txt /grant {{ ludus_win_privesc_victim_user }}:F"
