@@ -658,11 +658,8 @@ Deploy:
 ```bash
 ludus range config set -f ludus-range-config.yml
 ludus range deploy
-
-# Run validation tags after deployment
-ludus ansible roles run -n WIN2022 --tags validate
-ludus ansible roles run -n WIN11   --tags validate
 ```
+
 
 ---
 
