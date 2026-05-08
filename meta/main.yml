@@ -1,5 +1,6 @@
 ---
 galaxy_info:
+  role_name: ludus_win_privesc
   author: "mojeda101"
   description: "Ansible Role that configures Windows privilege escalation lab scenarios based on the nickvourd/Windows-Local-Privilege-Escalation-Cookbook"
   license: MIT

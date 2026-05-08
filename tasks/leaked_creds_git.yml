@@ -21,29 +21,29 @@
     Set-Location "C:\DevProjects\WebApp"
 
     git init
-    git config user.email "dev@company.local"
-    git config user.name "Developer"
+    git config user.email "{{ ludus_win_privesc_git_email }}"
+    git config user.name "{{ ludus_win_privesc_git_dev_name }}"
 
     # Create a config file with credentials
     @"
     [database]
-    host=db.company.local
-    port=1433
+    host={{ ludus_win_privesc_internal_db_host }}
+    port={{ ludus_win_privesc_internal_db_port }}
     username=sa
-    password={{ ludus_win_privesc_admin_password }}
+    password={{ ludus_win_privesc_git_password }}
 
     [admin]
-    username={{ ludus_win_privesc_admin_user }}
-    password={{ ludus_win_privesc_admin_password }}
+    username={{ ludus_win_privesc_git_user }}
+    password={{ ludus_win_privesc_git_password }}
     "@ | Out-File -FilePath "C:\DevProjects\WebApp\config.ini" -Encoding utf8
 
     # Create a .env file
     @"
-    DB_HOST=db.company.local
+    DB_HOST={{ ludus_win_privesc_internal_db_host }}
     DB_USER=sa
-    DB_PASS={{ ludus_win_privesc_admin_password }}
-    ADMIN_USER={{ ludus_win_privesc_admin_user }}
-    ADMIN_PASS={{ ludus_win_privesc_admin_password }}
+    DB_PASS={{ ludus_win_privesc_git_password }}
+    ADMIN_USER={{ ludus_win_privesc_git_user }}
+    ADMIN_PASS={{ ludus_win_privesc_git_password }}
     "@ | Out-File -FilePath "C:\DevProjects\WebApp\.env" -Encoding utf8
 
     git add .
@@ -52,13 +52,13 @@
     # "Remove" credentials (but they remain in git history)
     @"
     [database]
-    host=db.company.local
-    port=1433
+    host={{ ludus_win_privesc_internal_db_host }}
+    port={{ ludus_win_privesc_internal_db_port }}
     username=sa
     password=REDACTED
 
     [admin]
-    username={{ ludus_win_privesc_admin_user }}
+    username={{ ludus_win_privesc_git_user }}
     password=REDACTED
     "@ | Out-File -FilePath "C:\DevProjects\WebApp\config.ini" -Encoding utf8
 

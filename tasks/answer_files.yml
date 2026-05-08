@@ -14,7 +14,7 @@
   ansible.builtin.set_fact:
     # Windows Unattend encodes as UTF-16LE + "Password" suffix, then base64
     # For training purposes we use a simple base64 of the plain password
-    unattend_b64_password: "{{ (ludus_win_privesc_admin_password + 'Password') | b64encode }}"
+    unattend_b64_password: "{{ (ludus_win_privesc_unattend_password + 'Password') | b64encode }}"
 
 - name: Drop unattend.xml with encoded credentials
   ansible.windows.win_copy:
@@ -34,7 +34,7 @@
                           <PlainText>false</PlainText>
                       </Password>
                       <Enabled>true</Enabled>
-                      <Username>{{ ludus_win_privesc_admin_user }}</Username>
+                      <Username>{{ ludus_win_privesc_unattend_user }}</Username>
                   </AutoLogon>
                   <UserAccounts>
                       <LocalAccounts>
@@ -44,7 +44,7 @@
                                   <PlainText>false</PlainText>
                               </Password>
                               <Group>Administrators</Group>
-                              <Name>{{ ludus_win_privesc_admin_user }}</Name>
+                              <Name>{{ ludus_win_privesc_unattend_user }}</Name>
                           </LocalAccount>
                       </LocalAccounts>
                   </UserAccounts>

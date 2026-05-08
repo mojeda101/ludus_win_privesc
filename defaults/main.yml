@@ -93,6 +93,12 @@ ludus_win_privesc_uac_bypass_setup: true
 # true:  Full reboot ensures whoami /priv works immediately after deployment.
 ludus_win_privesc_reboot_after_privs: true
 
+# Leaked credentials in various file types (.env, .config, .json, .yml, .ini, .ps1, .py, .sql, .tfvars etc.)
+ludus_win_privesc_leaked_creds_files: true
+
+# PrintNightmare (CVE-2021-34527) — keeps Spooler running and weakens Point and Print policy
+ludus_win_privesc_printnightmare: true
+
 # Enumeration tool installation
 # Set to false - tools must be transferred manually to the target
 ludus_win_privesc_install_enum_tools: false
@@ -153,3 +159,96 @@ ludus_win_privesc_ssh_private_keys: true
 # Drops Office documents (.docx, .csv, .txt) with plaintext credentials
 # in realistic locations (Desktop, C:\IT, Public\Documents)
 ludus_win_privesc_office_creds: true
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PER-SCENARIO CREDENTIAL OVERRIDES
+# ═══════════════════════════════════════════════════════════════════════════
+# By default, every credential-bearing scenario uses the shared
+# ludus_win_privesc_admin_user / ludus_win_privesc_admin_password values
+# above. That means a single discovered cred unlocks every artifact in the
+# lab — fine for unit testing the role, but unrealistic for a full lab
+# scenario where different misconfigurations leak different identities.
+#
+# These per-scenario overrides let you map each scenario to a DIFFERENT
+# real account from your range. All default to the shared admin creds for
+# full backward compatibility — set them only when you want differentiation.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ─── Winlogon AutoLogon stored creds ─────────────────────────────────────────
+# Scenario: an admin set up AutoLogon on this workstation for a service.
+ludus_win_privesc_winlogon_user: "{{ ludus_win_privesc_admin_user }}"
+ludus_win_privesc_winlogon_password: "{{ ludus_win_privesc_admin_password }}"
+
+# ─── PowerShell history leak ─────────────────────────────────────────────────
+# Scenario: the user previously ran a command with cleartext creds.
+ludus_win_privesc_ps_history_user: "{{ ludus_win_privesc_admin_user }}"
+ludus_win_privesc_ps_history_password: "{{ ludus_win_privesc_admin_password }}"
+
+# ─── Git repository leak ─────────────────────────────────────────────────────
+# Scenario: a developer committed creds, then "removed" them in a later commit
+# but the secrets remain in git history.
+ludus_win_privesc_git_user: "{{ ludus_win_privesc_admin_user }}"
+ludus_win_privesc_git_password: "{{ ludus_win_privesc_admin_password }}"
+ludus_win_privesc_git_email: "dev@company.local"
+ludus_win_privesc_git_dev_name: "Developer"
+
+# ─── Leaked creds in config files ────────────────────────────────────────────
+# Scenario: scattered .env, .config, .json, .ini, .ps1, .py, .sql, .tfvars,
+# .log, .txt files all containing the same admin creds.
+ludus_win_privesc_files_user: "{{ ludus_win_privesc_admin_user }}"
+ludus_win_privesc_files_password: "{{ ludus_win_privesc_admin_password }}"
+
+# ─── Unattend / answer files ─────────────────────────────────────────────────
+# Scenario: leftover Unattend.xml from imaging contains a base64 admin pw.
+ludus_win_privesc_unattend_user: "{{ ludus_win_privesc_admin_user }}"
+ludus_win_privesc_unattend_password: "{{ ludus_win_privesc_admin_password }}"
+
+# ─── Office documents with embedded creds ────────────────────────────────────
+# Scenario: realistic desktop/share documents written by IT containing many
+# different credentials. The office_creds.yml task drops ~7 documents with
+# multiple identities; each can be customized below.
+ludus_win_privesc_office_admin_user: "{{ ludus_win_privesc_admin_user }}"
+ludus_win_privesc_office_admin_password: "{{ ludus_win_privesc_admin_password }}"
+ludus_win_privesc_office_dc_user: "Administrator"
+ludus_win_privesc_office_dc_password: "DC@dmin2024!"
+ludus_win_privesc_office_sql_password: "SqlAdmin2024!"
+ludus_win_privesc_office_backup_user: "Backup-Account"
+ludus_win_privesc_office_backup_password: "B@ckup2023sicher"
+ludus_win_privesc_office_veeam_user: "veeam_svc"
+ludus_win_privesc_office_veeam_password: "V33m@Backup!"
+ludus_win_privesc_office_wsus_user: "svc_wsus"
+ludus_win_privesc_office_wsus_password: "wsus_svc_P@ss!"
+ludus_win_privesc_office_router_password: "router@lab123"
+ludus_win_privesc_office_wifi_corp_ssid: "LabNetwork"
+ludus_win_privesc_office_wifi_corp_password: "LabWifiSecret99!"
+ludus_win_privesc_office_linux_user: "root"
+ludus_win_privesc_office_linux_password: "TuxSecure2024"
+ludus_win_privesc_office_breakglass_user: "bgadmin"
+ludus_win_privesc_office_breakglass_password: "Br3@kGl@ss!!"
+
+# Optional: a password manager / vault URL to mention in IT notes
+# (set this to your range's Psono / Bitwarden / etc. for added narrative).
+ludus_win_privesc_office_pwmanager_url: ""
+ludus_win_privesc_office_pwmanager_note: ""
+
+# ─── Internal infrastructure references ──────────────────────────────────────
+# These hostnames/IPs are written into many planted artifacts (PS history,
+# git config, config files, known_hosts, ssh config, office docs). Override
+# them to point at REAL hosts in your range so the recon trail lines up
+# with what the attacker can actually find on the network.
+ludus_win_privesc_internal_domain_fqdn: "lab.local"
+ludus_win_privesc_internal_dc_host: "dc01.lab.local"
+ludus_win_privesc_internal_dc_ip: "10.10.10.10"
+ludus_win_privesc_internal_fileserver_host: "fileserver.lab.local"
+ludus_win_privesc_internal_fileserver_ip: "10.10.10.20"
+ludus_win_privesc_internal_fileserver_share: "share"
+ludus_win_privesc_internal_veeam_host: "veeam.lab.local"
+ludus_win_privesc_internal_veeam_ip: "10.10.10.40"
+ludus_win_privesc_internal_linux_host: "linuxdev.lab.local"
+ludus_win_privesc_internal_linux_ip: "10.10.10.30"
+ludus_win_privesc_internal_db_host: "db.lab.local"
+ludus_win_privesc_internal_db_port: 1433
+ludus_win_privesc_internal_db_name: "AppDB"
+ludus_win_privesc_internal_mail_host: "mail.lab.local"
+ludus_win_privesc_internal_jumpbox_ip: "10.10.10.1"
+ludus_win_privesc_internal_win2022_ip: "10.10.10.50"

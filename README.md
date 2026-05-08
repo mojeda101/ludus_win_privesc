@@ -1,14 +1,16 @@
 # ludus_win_privesc
 
-An Ansible role for [Ludus](https://ludus.cloud/) that deploys **30 Windows privilege escalation lab scenarios** on Windows 10/11 and Windows Server 2019/2022. Each scenario is individually toggle-able and idempotent.
+An Ansible role for [Ludus](https://ludus.cloud/) that deploys **32 Windows privilege escalation lab scenarios** on Windows 10/11 and Windows Server 2019/2022. Each scenario is individually toggle-able and idempotent.
 
 Scenarios cover token privileges, service misconfigurations, registry weaknesses, credential discovery, and path/file vulnerabilities — providing a realistic environment for practicing local privilege escalation techniques.
+
+Every credential-discovery scenario can also be wired to a different identity from your range, so each planted misconfiguration leaks a different account — see [Per-Scenario Credential Overrides](#per-scenario-credential-overrides) below.
 
 ---
 
 ## Scenarios Covered
 
-All 30 scenarios are individually toggle-able via boolean variables:
+All 32 scenarios are individually toggle-able via boolean variables:
 
 | Category | Scenario | Variable |
 |---|---|---|
@@ -41,13 +43,17 @@ All 30 scenarios are individually toggle-able via boolean variables:
 | **Registry Misconfig** | WSUS over HTTP (MITM update injection) | `ludus_win_privesc_wsus_http` |
 | **Registry Misconfig** | AppLocker Disabled / Weak Rules | `ludus_win_privesc_applocker_disabled` |
 | **Path / File** | DLL Hijacking via Writable PATH Directory | `ludus_win_privesc_dll_hijacking_path` |
+| **Credential Discovery** | Leaked Credentials in Files (.env, .ps1, .py, .sql, .tfvars etc.) | `ludus_win_privesc_leaked_creds_files` |
+| **Kernel / Service** | PrintNightmare (CVE-2021-34527) | `ludus_win_privesc_printnightmare` |
 
 ---
 
-## ⚠️ Tamper Protection 
+## ⚠️ Tamper Protection — What It Affects and What It Does Not
 
-To remove defender you have to disable Tamper Protection and rerun the role.
+> **Important:** Tamper Protection (TP) only blocks writes to Windows Defender
+> registry keys.
 
+**Tamper Protection only needs to be disabled when `ludus_win_privesc_disable_defender: true`.**
 
 ---
 
@@ -77,48 +83,10 @@ via `whoami /priv` without elevation.
 - WinRM must be configured (Ludus handles this automatically)
 - Chocolatey must be installed on the target (required for the git credential leak scenario)
 - For domain user mode: the host must be domain-joined
-- **Tamper Protection must be disabled** 
+- **Tamper Protection must be disabled before the first role run** only if  `disable_defender: true`
 
 ---
 
-## Domain User Creation -> not tested
-
-When `ludus_win_privesc_victim_user_type: domain`, the role can automatically
-create the victim user in Active Directory. The task runs **on the DC** — the
-role must also be assigned to the DC VM with
-`ludus_win_privesc_create_domain_user: true` and all scenarios set to `false`.
-
-```yaml
-# On DC: only creates the domain user (all scenarios disabled)
-- vm_name: "{{ range_id }}-DC01"
-  roles:
-    - name: ludus_win_privesc
-      vars:
-        ludus_win_privesc_victim_user_type: "domain"
-        ludus_win_privesc_victim_user: "lowpriv"
-        ludus_win_privesc_victim_password: "Password123!"
-        ludus_win_privesc_domain: "LAB"
-        ludus_win_privesc_domain_fqdn: "lab.local"
-        ludus_win_privesc_create_domain_user: true
-        # all scenarios: false
-
-# On member VMs: all scenarios run, user creation skipped
-- vm_name: "{{ range_id }}-WIN2022"
-  roles:
-    - name: ludus_win_privesc
-      vars:
-        ludus_win_privesc_victim_user_type: "domain"
-        ludus_win_privesc_create_domain_user: false
-        # all scenarios: true
-```
-
-| Variable | Default | Description |
-|---|---|---|
-| `ludus_win_privesc_create_domain_user` | `true` | Create victim user in AD (DC only) |
-| `ludus_win_privesc_domain_fqdn` | `lab.local` | FQDN of the target domain |
-| `ludus_win_privesc_victim_ou` | `""` | OU for new user (empty = default Users container) |
-
----
 
 ## Role Variables
 
@@ -175,265 +143,280 @@ role must also be assigned to the DC VM with
 
 ---
 
-## Dependencies
+## Per-Scenario Credential Overrides
 
-None.
+By default, every credential-bearing scenario uses the shared
+`ludus_win_privesc_admin_user` / `ludus_win_privesc_admin_password` values.
+That's fine for unit-testing the role, but unrealistic for a full lab where
+you want different misconfigurations to leak different identities — e.g.
+a Winlogon AutoLogon entry from a help-desk account, an Unattend.xml from
+a deployment account, a developer's leaked git creds for a service account.
 
----
+These overrides let you map each scenario to a distinct identity. **Every
+override defaults to the shared admin credentials**, so set them only when
+you want differentiation. Mixing them lets a discovered credential unlock
+exactly one specific pivot, instead of opening every door at once.
 
-## Example Ludus Range Config — Standalone (local users, 3 VMs)
+### Per-scenario credential variables
 
-Deploys three VMs for comprehensive privilege escalation testing:
+| Variable | Default | Used by |
+|---|---|---|
+| `ludus_win_privesc_winlogon_user` / `_password` | shared admin | Winlogon AutoLogon registry |
+| `ludus_win_privesc_ps_history_user` / `_password` | shared admin | PSReadLine history |
+| `ludus_win_privesc_git_user` / `_password` | shared admin | Git config + .env in commit history |
+| `ludus_win_privesc_git_email` | `dev@company.local` | git `user.email` |
+| `ludus_win_privesc_git_dev_name` | `Developer` | git `user.name` |
+| `ludus_win_privesc_files_user` / `_password` | shared admin | .env, .config, .json, .yml, .ini, .ps1, .py, .sql, .tfvars, .log, .txt files |
+| `ludus_win_privesc_unattend_user` / `_password` | shared admin | Unattend.xml AutoLogon + LocalAccount blocks |
 
-- **WIN2022** — Windows Server 2022, all 30 scenarios
-- **WIN11** — Windows 11, all 30 scenarios (DISM IIS path, locale-safe groups)
-- **WIN11-UAC** — Windows 11, dedicated UAC bypass testing:
-  - `lowpriv` is a plain Users member — `whoami /priv` shows all token privileges directly
-  - `uacuser` is a local Administrator with UAC enabled — must bypass UAC to reach High Integrity
+### Office documents — 15 separate identities
 
+The `office_creds.yml` task drops several IT-team-style password notes
+(Passwoerter.txt, IT-Server-Credentials.txt, passwords_export.csv,
+IT-Notizen.txt, Passwort-Liste.csv, a Word doc, plus a randomly named
+folder of config files). Each row in those documents now maps to its own
+variable so you can wire each one to a real account in your range:
+
+| Variable | Default | Appears in |
+|---|---|---|
+| `ludus_win_privesc_office_admin_user` / `_password` | shared admin | All documents (primary admin row) |
+| `ludus_win_privesc_office_dc_user` / `_password` | `Administrator` / `DC@dmin2024!` | DC entry in IT notes / CSV |
+| `ludus_win_privesc_office_sql_password` | `SqlAdmin2024!` | SQL Server SA row |
+| `ludus_win_privesc_office_backup_user` / `_password` | `Backup-Account` / `B@ckup2023sicher` | Backup account row |
+| `ludus_win_privesc_office_veeam_user` / `_password` | `veeam_svc` / `V33m@Backup!` | Veeam service row |
+| `ludus_win_privesc_office_wsus_user` / `_password` | `svc_wsus` / `wsus_svc_P@ss!` | WSUS service row |
+| `ludus_win_privesc_office_router_password` | `router@lab123` | Router admin row |
+| `ludus_win_privesc_office_wifi_corp_ssid` / `_password` | `LabNetwork` / `LabWifiSecret99!` | WiFi SSID + password |
+| `ludus_win_privesc_office_linux_user` / `_password` | `root` / `TuxSecure2024` | Linux host row |
+| `ludus_win_privesc_office_breakglass_user` / `_password` | `bgadmin` / `Br3@kGl@ss!!` | Break-glass admin row in IT notes |
+| `ludus_win_privesc_office_pwmanager_url` | `""` | (Optional) Password manager URL added to IT notes |
+| `ludus_win_privesc_office_pwmanager_note` | `""` | (Optional) Free-text line added to IT notes |
+
+### Internal infrastructure references
+
+These hostnames and IPs are written into many of the planted artifacts —
+PS history, git commits, config files, known_hosts, SSH config files, and
+IT notes. Override them so the recon trail in your lab points at hosts the
+attacker can actually scan and reach on the network.
+
+| Variable | Default |
+|---|---|
+| `ludus_win_privesc_internal_domain_fqdn` | `lab.local` |
+| `ludus_win_privesc_internal_dc_host` / `_dc_ip` | `dc01.lab.local` / `10.10.10.10` |
+| `ludus_win_privesc_internal_fileserver_host` / `_ip` / `_share` | `fileserver.lab.local` / `10.10.10.20` / `share` |
+| `ludus_win_privesc_internal_veeam_host` / `_ip` | `veeam.lab.local` / `10.10.10.40` |
+| `ludus_win_privesc_internal_linux_host` / `_ip` | `linuxdev.lab.local` / `10.10.10.30` |
+| `ludus_win_privesc_internal_db_host` / `_db_port` / `_db_name` | `db.lab.local` / `1433` / `AppDB` |
+| `ludus_win_privesc_internal_mail_host` | `mail.lab.local` |
+| `ludus_win_privesc_internal_jumpbox_ip` | `10.10.10.1` |
+| `ludus_win_privesc_internal_win2022_ip` | `10.10.10.50` |
+
+### Example: complete Ludus range configs
+
+Two complete examples follow — pick the one that matches how you're using
+the role. The standalone (local-mode) example is a single-VM lab that
+showcases all the per-scenario credential overrides without needing AD;
+the domain example shows the same identities mapped onto a real corp.local
+tenant for connected-lab scenarios.
+
+#### Example 1 — Standalone (local mode, single VM)
+
+A single Windows 11 host, no domain. The role creates `lowpriv` and
+`Administrator` locally; every credential-discovery scenario then references
+a different *fictional* identity baked into the documents and registry.
+There's nothing for the discovered creds to authenticate to (since this is
+a one-VM lab) — the value is in practicing the discovery techniques and
+seeing what realistic differentiated identity-leakage looks like across a
+real workstation.
 
 ```yaml
----
-
 ludus:
-
-  # ── Kali Attack Box ──────────────────────────────────────────────────────────
-  - vm_name: "{{ range_id }}-KALI"
-    hostname: "{{ range_id }}-kali"
-    template: kali-x64-desktop-template
-    vlan: 10
-    ip_last_octet: 99
-    ram_gb: 4
-    cpus: 2
-    linux: true
-
-  # ── Windows Server 2022 Target ───────────────────────────────────────────────
-  # Tests: Install-WindowsFeature (IIS), all service misconfigs, secedit privs
-  - vm_name: "{{ range_id }}-WIN2022"
-    hostname: "WIN2022"
-    template: win2022-server-x64-template
-    vlan: 10
-    ip_last_octet: 50
-    ram_gb: 4
-    cpus: 2
-    windows:
-      sysprep: true
-    roles:
-      - name: ludus_win_privesc_new
-        vars:
-          # ── User config ──────────────────────────────────────────────────────
-          ludus_win_privesc_victim_user_type: "local"
-          ludus_win_privesc_victim_user: "lowpriv"
-          ludus_win_privesc_victim_password: "Password123!"
-          ludus_win_privesc_admin_user: "Administrator"
-          ludus_win_privesc_admin_password: "P@ssw0rd123!"
-          ludus_win_privesc_create_domain_user: false  # local mode — no AD user needed
-
-          ludus_win_privesc_install_defender_gui: false    # ← keep false after GUI install
-          ludus_win_privesc_disable_defender: true
-          # ── Original Scenarios ───────────────────────────────────────────────
-          ludus_win_privesc_seimpersonate: true     
-          ludus_win_privesc_sebackup: true
-          ludus_win_privesc_unquoted_service_path: true
-          ludus_win_privesc_weak_service_binary: true
-          ludus_win_privesc_weak_service_registry: true
-          ludus_win_privesc_hardcoded_credentials_dotnet: true
-          ludus_win_privesc_stored_credentials_winlogon: true
-          ludus_win_privesc_leaked_creds_ps_history: true
-          ludus_win_privesc_leaked_creds_git: true
-          ludus_win_privesc_answer_files: true
-          ludus_win_privesc_always_install_elevated: true
-          ludus_win_privesc_weak_startup_folder: true
-          ludus_win_privesc_weak_registry_run_key: true
-          ludus_win_privesc_uac_bypass_setup: false  # handled on WIN11-UAC VM
-
-          # ── Group A: Token Privileges ─────────────────────────────────────────
-          ludus_win_privesc_sedebug: true
-          ludus_win_privesc_serestore: true
-          ludus_win_privesc_setakeownership: true
-          ludus_win_privesc_seloaddriver: true
-          ludus_win_privesc_semanagevolume: true
-          ludus_win_privesc_backup_operators_group: true
-          ludus_win_privesc_server_operators_group: true
-
-          # ── Group B: Registry / Security Config ───────────────────────────────
-          ludus_win_privesc_wdigest_enabled: true
-          ludus_win_privesc_wsus_http: true
-          ludus_win_privesc_applocker_disabled: true
-          ludus_win_privesc_applocker_weak_rules: false
-
-          # ── Group C: Path / File ──────────────────────────────────────────────
-          ludus_win_privesc_dll_hijacking_path: true
-          ludus_win_privesc_dll_hijack_dir: "C:\\DevUtils"
-          ludus_win_privesc_gpp_cpassword: true
-          ludus_win_privesc_wifi_profile: true
-          ludus_win_privesc_ssh_private_keys: true
-          ludus_win_privesc_office_creds: true
-
-  # ── Windows 11 22H2 Target ───────────────────────────────────────────────────
-  # Tests: DISM IIS path, IIS-ASPNET fallback, SID-based group membership,
-  #        Get-CimInstance. Win11 hat Defender GUI immer — TP via RDP deaktivieren.
-  - vm_name: "{{ range_id }}-WIN11"
-    hostname: "WIN11"
+  - vm_name: "{{ range_id }}-privesc-ws"
+    hostname: "PRIVESC-WS"
     template: win11-22h2-x64-enterprise-template
     vlan: 10
-    ip_last_octet: 51
+    ip_last_octet: 11
     ram_gb: 4
     cpus: 2
     windows:
       sysprep: true
     roles:
-      - name: ludus_win_privesc_new
-        vars:
-          # ── User config ──────────────────────────────────────────────────────
-          ludus_win_privesc_victim_user_type: "local"
-          ludus_win_privesc_victim_user: "lowpriv"
-          ludus_win_privesc_victim_password: "Password123!"
-          ludus_win_privesc_admin_user: "Administrator"
-          ludus_win_privesc_admin_password: "P@ssw0rd123!"
-          ludus_win_privesc_create_domain_user: false  # local mode — no AD user needed
+      - mojeda101.ludus_win_privesc
+    role_vars:
+      # ── Victim & shared admin (created by the role) ──────────────────────
+      ludus_win_privesc_victim_user_type: "local"
+      ludus_win_privesc_victim_user: "lowpriv"
+      ludus_win_privesc_victim_password: "Password123!"
+      ludus_win_privesc_admin_user: "Administrator"
+      ludus_win_privesc_admin_password: "P@ssw0rd123!"
 
-          ludus_win_privesc_install_defender_gui: false  # not needed on Win11
-          ludus_win_privesc_disable_defender: true
-          ludus_win_privesc_reboot_after_privs: true  # false = 1 less reboot, whoami /priv needs manual re-login
+      # uac_bypass_setup off if you want a pure low-priv-domain-style story;
+      # leave it on for full UAC bypass practice in standalone mode.
+      ludus_win_privesc_uac_bypass_setup: true
 
-          # ── Original Scenarios ────────────────────────────────────────────────
-          ludus_win_privesc_seimpersonate: true       # ⚠️ requires TP off (Defender blocks IIS install)
-          ludus_win_privesc_sebackup: true
-          ludus_win_privesc_unquoted_service_path: true
-          ludus_win_privesc_weak_service_binary: true
-          ludus_win_privesc_weak_service_registry: true
-          ludus_win_privesc_hardcoded_credentials_dotnet: true
-          ludus_win_privesc_stored_credentials_winlogon: true
-          ludus_win_privesc_leaked_creds_ps_history: true
-          ludus_win_privesc_leaked_creds_git: true
-          ludus_win_privesc_answer_files: true
-          ludus_win_privesc_always_install_elevated: true
-          ludus_win_privesc_weak_startup_folder: true
-          ludus_win_privesc_weak_registry_run_key: true
-          ludus_win_privesc_uac_bypass_setup: false  # handled on WIN11-UAC VM
+      # ══════════════════════════════════════════════════════════════════════
+      # Per-scenario identity mapping — each credential plant references a
+      # different fictional account, so the documents read like a real
+      # workstation with multiple distinct identities scattered across it.
+      # ══════════════════════════════════════════════════════════════════════
 
-          # ── Group A: Token Privileges ─────────────────────────────────────────
-          ludus_win_privesc_sedebug: true
-          ludus_win_privesc_serestore: true
-          ludus_win_privesc_setakeownership: true
-          ludus_win_privesc_seloaddriver: true
-          ludus_win_privesc_semanagevolume: true
-          ludus_win_privesc_backup_operators_group: true
-          ludus_win_privesc_server_operators_group: false  # Server Operators meaningless on Standalone 
+      # Winlogon AutoLogon — IT helpdesk left themselves a backdoor.
+      ludus_win_privesc_winlogon_user: "helpdesk-svc"
+      ludus_win_privesc_winlogon_password: "HelpD3sk!2024"
 
-          # ── Group B: Registry / Security Config ───────────────────────────────
-          ludus_win_privesc_wdigest_enabled: true
-          ludus_win_privesc_wsus_http: true
-          ludus_win_privesc_applocker_disabled: true
-          ludus_win_privesc_applocker_weak_rules: false
+      # PowerShell history — an LDAP bind script ran here recently.
+      ludus_win_privesc_ps_history_user: "ldap-bind"
+      ludus_win_privesc_ps_history_password: "Ldap@Bind#2024"
 
-          # ── Group C: Path / File ──────────────────────────────────────────────
-          ludus_win_privesc_dll_hijacking_path: true
-          ludus_win_privesc_dll_hijack_dir: "C:\\DevUtils"
-          ludus_win_privesc_gpp_cpassword: true
-          ludus_win_privesc_wifi_profile: true
-          ludus_win_privesc_ssh_private_keys: true
-          ludus_win_privesc_office_creds: true
+      # Git repo — developer committed a Postgres password.
+      ludus_win_privesc_git_user: "postgres"
+      ludus_win_privesc_git_password: "DB@Postgres2024!"
+      ludus_win_privesc_git_dev_name: "Jane Doe"
+      ludus_win_privesc_git_email: "j.doe@corp.local"
 
-  # ── Windows 11 — UAC Bypass Scenario ────────────────────────────────────────
-  # Dedicated VM for UAC bypass testing.
-  # uacuser is in local Administrators but has NO extra token privileges —
-  # goal is purely UAC bypass to reach High Integrity.
-  # lowpriv on this VM has token privileges but is NOT in Administrators,
-  # so whoami /priv shows all assigned privileges directly.
-  - vm_name: "{{ range_id }}-WIN11-UAC"
-    hostname: "WIN11UAC"
-    template: win11-22h2-x64-enterprise-template
-    vlan: 10
-    ip_last_octet: 52
-    ram_gb: 4
-    cpus: 2
-    windows:
-      sysprep: true
-    roles:
-      - name: ludus_win_privesc_new
-        vars:
-          # ── User config ──────────────────────────────────────────────────────
-          ludus_win_privesc_victim_user_type: "local"
-          ludus_win_privesc_victim_user: "lowpriv"
-          ludus_win_privesc_victim_password: "Password123!"
-          ludus_win_privesc_admin_user: "Administrator"
-          ludus_win_privesc_admin_password: "P@ssw0rd123!"
+      # Config files — same Postgres credentials sprayed across .env etc.
+      ludus_win_privesc_files_user: "postgres"
+      ludus_win_privesc_files_password: "DB@Postgres2024!"
 
-          # ── Defender ─────────────────────────────────────────────────────────
-          ludus_win_privesc_install_defender_gui: false
-          ludus_win_privesc_disable_defender: true
-          ludus_win_privesc_reboot_after_privs: true
+      # Unattend.xml — leftover from the workstation imaging account.
+      ludus_win_privesc_unattend_user: "image-build"
+      ludus_win_privesc_unattend_password: "Im@ge2024!"
 
-          # ── UAC Bypass scenario ───────────────────────────────────────────────
-          # lowpriv is NOT in Administrators → whoami /priv shows all privs directly
-          # uacuser IS in Administrators → must bypass UAC to reach High Integrity
-          ludus_win_privesc_uac_bypass_setup: true   # adds uacuser to Administrators
+      # Office docs — IT password notes referencing several accounts.
+      ludus_win_privesc_office_admin_user: "helpdesk-svc"
+      ludus_win_privesc_office_admin_password: "HelpD3sk!2024"
+      ludus_win_privesc_office_dc_user: "domainadmin"
+      ludus_win_privesc_office_dc_password: "DA-Real-Pw-2024!"
+      ludus_win_privesc_office_veeam_user: "veeam-repo-user"
+      ludus_win_privesc_office_veeam_password: "Veeam@Repo2024"
+      ludus_win_privesc_office_linux_user: "veeam-repo-user"
+      ludus_win_privesc_office_linux_password: "Veeam@Repo2024"
 
-          # ── Token Privileges (all enabled — visible without elevation) ────────
-          # lowpriv is a plain user → no UAC filtering → all privs visible in token
-          ludus_win_privesc_sedebug: true
-          ludus_win_privesc_sebackup: true
-          ludus_win_privesc_serestore: true
-          ludus_win_privesc_setakeownership: true
-          ludus_win_privesc_seloaddriver: true
-          ludus_win_privesc_semanagevolume: true
-          ludus_win_privesc_seimpersonate: true
-          ludus_win_privesc_backup_operators_group: true
-          ludus_win_privesc_server_operators_group: false
+      # Internal infrastructure — fictional hostnames that show up in the
+      # planted artifacts (known_hosts, SSH config, IT notes).
+      ludus_win_privesc_internal_domain_fqdn: "corp.local"
+      ludus_win_privesc_internal_dc_host: "dc01.corp.local"
+      ludus_win_privesc_internal_fileserver_host: "fs01.corp.local"
+      ludus_win_privesc_internal_veeam_host: "veeam.corp.local"
+      # ── Original Scenarios ───────────────────────────────────────────────
+      ludus_win_privesc_seimpersonate: true     
+      ludus_win_privesc_sebackup: true
+      ludus_win_privesc_unquoted_service_path: true
+      ludus_win_privesc_weak_service_binary: true
+      ludus_win_privesc_weak_service_registry: true
+      ludus_win_privesc_hardcoded_credentials_dotnet: true
+      ludus_win_privesc_stored_credentials_winlogon: true
+      ludus_win_privesc_leaked_creds_ps_history: true
+      ludus_win_privesc_leaked_creds_git: true
+      ludus_win_privesc_answer_files: true
+      ludus_win_privesc_always_install_elevated: true
+      ludus_win_privesc_weak_startup_folder: true
+      ludus_win_privesc_weak_registry_run_key: true
+      ludus_win_privesc_uac_bypass_setup: false  # handled on WIN11-UAC VM
 
-          # ── All other scenarios disabled on this VM ───────────────────────────
-          ludus_win_privesc_wdigest_enabled: false
-          ludus_win_privesc_wsus_http: false
-          ludus_win_privesc_applocker_disabled: false
-          ludus_win_privesc_dll_hijacking_path: false
-          ludus_win_privesc_gpp_cpassword: false
-          ludus_win_privesc_wifi_profile: false
-          ludus_win_privesc_ssh_private_keys: false
-          ludus_win_privesc_office_creds: false
-          ludus_win_privesc_unquoted_service_path: false
-          ludus_win_privesc_weak_service_binary: false
-          ludus_win_privesc_weak_service_registry: false
-          ludus_win_privesc_hardcoded_credentials_dotnet: false
-          ludus_win_privesc_stored_credentials_winlogon: false
-          ludus_win_privesc_leaked_creds_ps_history: false
-          ludus_win_privesc_leaked_creds_git: false
-          ludus_win_privesc_answer_files: false
-          ludus_win_privesc_always_install_elevated: false
-          ludus_win_privesc_weak_startup_folder: false
-          ludus_win_privesc_weak_registry_run_key: false
+      # ── Group A: Token Privileges ─────────────────────────────────────────
+      ludus_win_privesc_sedebug: true
+      ludus_win_privesc_serestore: true
+      ludus_win_privesc_setakeownership: true
+      ludus_win_privesc_seloaddriver: true
+      ludus_win_privesc_semanagevolume: true
+      ludus_win_privesc_backup_operators_group: true
+      ludus_win_privesc_server_operators_group: true
+
+      # ── Group B: Registry / Security Config ───────────────────────────────
+      ludus_win_privesc_wdigest_enabled: true
+      ludus_win_privesc_wsus_http: true
+      ludus_win_privesc_applocker_disabled: true
+      ludus_win_privesc_applocker_weak_rules: false
+
+      # ── Group C: Path / File ──────────────────────────────────────────────
+      ludus_win_privesc_dll_hijacking_path: true
+      ludus_win_privesc_dll_hijack_dir: "C:\\DevUtils"
+      ludus_win_privesc_gpp_cpassword: true
+      ludus_win_privesc_wifi_profile: true
+      ludus_win_privesc_ssh_private_keys: true
+      ludus_win_privesc_office_creds: true
+      ludus_win_privesc_internal_db_host: "db.corp.local"        # NEW
+      ludus_win_privesc_internal_linux_host: "linuxdev.corp.local"  # NEW
+      ludus_win_privesc_internal_mail_host: "mail.corp.local"    # NEW
+network:
+  inter_vlan_default: ACCEPT
 ```
 
----
+What the trainee practices on this single box: enumerating Winlogon
+registry, parsing PSReadLine history, walking git history with
+`git log -p --all`, finding `.env` and `Unattend.xml` files, and reading
+the planted Office docs. They'll discover ~8 distinct identities across
+the various plants — the lesson being that one workstation can leak many
+different accounts depending on where you look.
 
-## Example Ludus Range Config — Domain-joined (domain user, automatic user creation) -> not tested 
+#### Example 2 — Domain-joined (corp.local AD, two VMs)
 
-Deploys a DC plus two domain-joined member VMs. Uses the Ludus built-in
-`disable_defender` GPO — no manual Tamper Protection step required.
-The role automatically creates the `lowpriv` victim user in Active Directory
-when running on the DC (`ludus_win_privesc_create_domain_user: true`).
+> **Status: untested.** The role's domain-mode wiring (auto-created victim
+> users, `_create_domain_user`, etc.) is in place and the per-scenario
+> overrides plug into it cleanly in principle, but this exact two-VM
+> configuration has not been deployed end-to-end yet. If you try it, please
+> open an issue with what worked and what didn't. Treat the standalone
+> example above as the canonical "known-good" path until then.
+
+A fully deployable two-VM range using `corp.local` as the fictional company.
+The `corp-dc` builds the AD tenant with a handful of distinct identities;
+the `corp-ws01` workstation runs this role in domain mode and wires every
+credential-discovery scenario to a different account from that tenant.
+
+The interesting property of this version: discovered credentials *actually
+authenticate*. Recovering `helpdesk-svc` from Winlogon gives an attacker
+real RDP rights to the workstation. Recovering `domainadmin` from the
+office docs gives them the real DA password to the real DC. The lesson is
+the same — chain across discoveries to escalate — but with a working
+authentication target on the other end.
+
+##### Domain User Creation -> untested 
+
+When `ludus_win_privesc_victim_user_type: domain`, the role can automatically
+create the victim user in Active Directory. The task runs **on the DC** — the
+role must also be assigned to the DC VM with
+`ludus_win_privesc_create_domain_user: true` and all scenarios set to `false`.
 
 ```yaml
+# On DC: only creates the domain user (all scenarios disabled)
+- vm_name: "{{ range_id }}-DC01"
+  roles:
+    - name: ludus_win_privesc
+      vars:
+        ludus_win_privesc_victim_user_type: "domain"
+        ludus_win_privesc_victim_user: "lowpriv"
+        ludus_win_privesc_victim_password: "Password123!"
+        ludus_win_privesc_domain: "LAB"
+        ludus_win_privesc_domain_fqdn: "lab.local"
+        ludus_win_privesc_create_domain_user: true
+        # all scenarios: false
+
+# On member VMs: all scenarios run, user creation skipped
+- vm_name: "{{ range_id }}-WIN2022"
+  roles:
+    - name: ludus_win_privesc
+      vars:
+        ludus_win_privesc_victim_user_type: "domain"
+        ludus_win_privesc_create_domain_user: false
+        # all scenarios: true
+```
+
+
+| Variable | Default | Description |
+|---|---|---|
+| `ludus_win_privesc_create_domain_user` | `true` | Create victim user in AD (DC only) |
+| `ludus_win_privesc_domain_fqdn` | `lab.local` | FQDN of the target domain |
+| `ludus_win_privesc_victim_ou` | `""` | OU for new user (empty = default Users container) |
+
 ---
 
+```yaml
 ludus:
-
-  # ── Kali Attack Box ──────────────────────────────────────────────────────────
-  - vm_name: "{{ range_id }}-KALI"
-    hostname: "{{ range_id }}-kali"
-    template: kali-x64-desktop-template
-    vlan: 10
-    ip_last_octet: 99
-    ram_gb: 4
-    cpus: 2
-    linux: true
-
-  # ── Domain Controller ────────────────────────────────────────────────────────
-  # The role also runs on the DC — but only the create_domain_user task
-  # executes there (when: domain_controller role). All other scenarios run
-  # on member VMs only.
-  - vm_name: "{{ range_id }}-DC01"
+  # ──────────────────────────────────────────────────────────────────────────
+  # Domain Controller — creates the identities the privesc role will reference
+  # ──────────────────────────────────────────────────────────────────────────
+  - vm_name: "{{ range_id }}-corp-dc"
     hostname: "DC01"
     template: win2022-server-x64-template
     vlan: 10
@@ -443,201 +426,394 @@ ludus:
     windows:
       sysprep: true
     domain:
-      fqdn: lab.local
+      fqdn: corp.local
       role: primary-dc
     roles:
-      - name: ludus_win_privesc_new
-        vars:
-          ludus_win_privesc_victim_user_type: "domain"
-          ludus_win_privesc_victim_user: "lowpriv"
-          ludus_win_privesc_victim_password: "Password123!"
-          ludus_win_privesc_domain: "LAB"
-          ludus_win_privesc_domain_fqdn: "lab.local"
-          ludus_win_privesc_create_domain_user: true
-          ludus_win_privesc_victim_ou: ""           # default Users container
-          # Alle Szenarien deaktiviert auf dem DC — nur User-Erstellung läuft
-          ludus_win_privesc_disable_defender: false
-          ludus_win_privesc_install_defender_gui: false
-          ludus_win_privesc_reboot_after_privs: true  # false = 1 Reboot weniger
-          ludus_win_privesc_seimpersonate: false
-          ludus_win_privesc_sebackup: false
-          ludus_win_privesc_unquoted_service_path: false
-          ludus_win_privesc_weak_service_binary: false
-          ludus_win_privesc_weak_service_registry: false
-          ludus_win_privesc_hardcoded_credentials_dotnet: false
-          ludus_win_privesc_stored_credentials_winlogon: false
-          ludus_win_privesc_leaked_creds_ps_history: false
-          ludus_win_privesc_leaked_creds_git: false
-          ludus_win_privesc_answer_files: false
-          ludus_win_privesc_always_install_elevated: false
-          ludus_win_privesc_weak_startup_folder: false
-          ludus_win_privesc_weak_registry_run_key: false
-          ludus_win_privesc_uac_bypass_setup: false
-          ludus_win_privesc_sedebug: false
-          ludus_win_privesc_serestore: false
-          ludus_win_privesc_setakeownership: false
-          ludus_win_privesc_seloaddriver: false
-          ludus_win_privesc_semanagevolume: false
-          ludus_win_privesc_backup_operators_group: false
-          ludus_win_privesc_server_operators_group: false
-          ludus_win_privesc_wdigest_enabled: false
-          ludus_win_privesc_wsus_http: false
-          ludus_win_privesc_applocker_disabled: false
-          ludus_win_privesc_dll_hijacking_path: false
-          ludus_win_privesc_gpp_cpassword: false
-          ludus_win_privesc_wifi_profile: false
-          ludus_win_privesc_ssh_private_keys: false
-          ludus_win_privesc_office_creds: false
+      - ludus_ad_group_all
+    role_vars:
+      ludus_ad:
+        users:
+          # Domain Admin — the prize. Should ONLY be discoverable via the
+          # office_dc_* office_creds entry.
+          - name: domainadmin
+            firstname: Domain
+            surname: Admin
+            display_name: Domain Admin
+            password: "DA-Real-Pw-2024!"
+            path: "DC=corp,DC=local"
+            groups: [Domain Users, Domain Admins]
 
-  # ── Windows Server 2022 — Domain-Joined ──────────────────────────────────────
-  # Ludus disable_defender GPO deaktiviert Defender inkl. Tamper Protection
-  # via domain policy — no manual Tamper Protection step needed.
-  - vm_name: "{{ range_id }}-WIN2022"
-    hostname: "WIN2022"
-    template: win2022-server-x64-template
-    vlan: 10
-    ip_last_octet: 50
-    ram_gb: 4
-    cpus: 2
-    windows:
-      sysprep: true
-    domain:
-      fqdn: lab.local
-      role: member
-    gpos:
-      - disable_defender     # Ludus built-in: erstellt und verknüpft GPO die
-                             # Defender für alle Domain-Windows-Maschinen deaktiviert
-    roles:
-      - name: ludus_win_privesc_new
-        vars:
-          # ── User config ──────────────────────────────────────────────────────
-          # Domain-User Modus: lowpriv muss in AD existieren (von DC erstellt)
-          ludus_win_privesc_victim_user_type: "domain"
-          ludus_win_privesc_victim_user: "lowpriv"
-          ludus_win_privesc_domain: "LAB"
-          ludus_win_privesc_domain_fqdn: "lab.local"
-          ludus_win_privesc_create_domain_user: false   # DC-Role erstellt den User
-          ludus_win_privesc_admin_user: "Administrator"
-          ludus_win_privesc_admin_password: "P@ssw0rd123!"
+          # Help desk service account — reachable via the Winlogon AutoLogon
+          # registry plant. Limited blast radius (no DA, no remote admin).
+          - name: helpdesk-svc
+            firstname: Helpdesk
+            surname: Service
+            display_name: Helpdesk Service
+            password: "HelpD3sk!2024"
+            path: "DC=corp,DC=local"
+            groups: [Domain Users]
 
-          # ── Defender ─────────────────────────────────────────────────────────
-          # GPO übernimmt Defender-Deaktivierung → disable_defender: false
-          # No Tamper Protection issue — GPO handles Defender.
-          ludus_win_privesc_disable_defender: false
-          ludus_win_privesc_install_defender_gui: false
-          ludus_win_privesc_reboot_after_privs: true  # false = 1 Reboot weniger
+          # LDAP bind account — appears in PowerShell history. Read-only on
+          # AD; useful for enumeration but not direct compromise.
+          - name: ldap-bind
+            firstname: LDAP
+            surname: Bind
+            display_name: LDAP Bind
+            password: "Ldap@Bind#2024"
+            path: "DC=corp,DC=local"
+            groups: [Domain Users]
 
-          # ── Original Scenarios ────────────────────────────────────────────────
-          ludus_win_privesc_seimpersonate: true     
-          ludus_win_privesc_sebackup: true
-          ludus_win_privesc_unquoted_service_path: true
-          ludus_win_privesc_weak_service_binary: true
-          ludus_win_privesc_weak_service_registry: true
-          ludus_win_privesc_hardcoded_credentials_dotnet: true
-          ludus_win_privesc_stored_credentials_winlogon: true
-          ludus_win_privesc_leaked_creds_ps_history: true
-          ludus_win_privesc_leaked_creds_git: true
-          ludus_win_privesc_answer_files: true
-          ludus_win_privesc_always_install_elevated: true
-          ludus_win_privesc_weak_startup_folder: true
-          ludus_win_privesc_weak_registry_run_key: true
-          ludus_win_privesc_uac_bypass_setup: true
+          # Image-build account — appears in Unattend.xml. Local admin on
+          # workstations during deployment, no domain rights.
+          - name: image-build
+            firstname: Image
+            surname: Build
+            display_name: Image Build
+            password: "Im@ge2024!"
+            path: "DC=corp,DC=local"
+            groups: [Domain Users]
 
-          # ── Group A: Token Privileges ─────────────────────────────────────────
-          ludus_win_privesc_sedebug: true
-          ludus_win_privesc_serestore: true
-          ludus_win_privesc_setakeownership: true
-          ludus_win_privesc_seloaddriver: true
-          ludus_win_privesc_semanagevolume: true
-          ludus_win_privesc_backup_operators_group: true
-          ludus_win_privesc_server_operators_group: true
+          # Veeam repo account — appears in the Office docs. Gives SSH to a
+          # backup repo (which would be a separate VM in your real lab).
+          - name: veeam-repo-user
+            firstname: Veeam
+            surname: Repo
+            display_name: Veeam Repo
+            password: "Veeam@Repo2024"
+            path: "DC=corp,DC=local"
+            groups: [Domain Users]
 
-          # ── Group B: Registry / Security Config ───────────────────────────────
-          ludus_win_privesc_wdigest_enabled: true
-          ludus_win_privesc_wsus_http: true
-          ludus_win_privesc_applocker_disabled: true
-          ludus_win_privesc_applocker_weak_rules: false
+          # The victim user — what the foothold lands as.
+          - name: lowpriv
+            firstname: Low
+            surname: Priv
+            display_name: Low Priv
+            password: "Password123!"
+            path: "DC=corp,DC=local"
+            groups: [Domain Users]
 
-          # ── Group C: Path / File ──────────────────────────────────────────────
-          ludus_win_privesc_dll_hijacking_path: true
-          ludus_win_privesc_dll_hijack_dir: "C:\\DevUtils"
-          ludus_win_privesc_gpp_cpassword: true
-          ludus_win_privesc_wifi_profile: true
-          ludus_win_privesc_ssh_private_keys: true
-          ludus_win_privesc_office_creds: true
-
-  # ── Windows 11 — Domain-Joined ───────────────────────────────────────────────
-  - vm_name: "{{ range_id }}-WIN11"
-    hostname: "WIN11"
+  # ──────────────────────────────────────────────────────────────────────────
+  # Workstation — runs ludus_win_privesc with per-scenario identity mapping
+  # ──────────────────────────────────────────────────────────────────────────
+  - vm_name: "{{ range_id }}-corp-ws01"
+    hostname: "WS01"
     template: win11-22h2-x64-enterprise-template
     vlan: 10
-    ip_last_octet: 51
+    ip_last_octet: 11
     ram_gb: 4
     cpus: 2
     windows:
       sysprep: true
     domain:
-      fqdn: lab.local
+      fqdn: corp.local
       role: member
-    gpos:
-      - disable_defender     # also applies to Win11 — no manual TP step needed
     roles:
-      - name: ludus_win_privesc_new
-        vars:
-          # ── User config ──────────────────────────────────────────────────────
-          ludus_win_privesc_victim_user_type: "domain"
-          ludus_win_privesc_victim_user: "lowpriv"
-          ludus_win_privesc_domain: "LAB"
-          ludus_win_privesc_domain_fqdn: "lab.local"
-          ludus_win_privesc_create_domain_user: false   # DC-Role erstellt den User
-          ludus_win_privesc_admin_user: "Administrator"
-          ludus_win_privesc_admin_password: "P@ssw0rd123!"
+      - name: mojeda101.ludus_win_privesc
+        depends_on:
+          - vm_name: "{{ range_id }}-corp-dc"
+            role: ludus_ad_group_all
+    role_vars:
+      # ── Victim & shared admin ────────────────────────────────────────────
+      ludus_win_privesc_victim_user_type: "domain"
+      ludus_win_privesc_victim_user: "lowpriv"
+      ludus_win_privesc_create_domain_user: false  # already created above
+      ludus_win_privesc_admin_user: "Administrator"
+      ludus_win_privesc_admin_password: "P@ssw0rd123!"
 
-          # ── Defender ─────────────────────────────────────────────────────────
-          # GPO disable_defender applies automatically — no manual TP step needed
-          ludus_win_privesc_disable_defender: false
-          ludus_win_privesc_install_defender_gui: false
-          ludus_win_privesc_reboot_after_privs: true  # false = 1 Reboot weniger
+      # uac_bypass_setup off because it requires the victim to be local admin,
+      # which contradicts the "domain low-priv user" foothold.
+      ludus_win_privesc_uac_bypass_setup: false
 
-          # ── Original Scenarios ────────────────────────────────────────────────
-          ludus_win_privesc_seimpersonate: true
-          ludus_win_privesc_sebackup: true
-          ludus_win_privesc_unquoted_service_path: true
-          ludus_win_privesc_weak_service_binary: true
-          ludus_win_privesc_weak_service_registry: true
-          ludus_win_privesc_hardcoded_credentials_dotnet: true
-          ludus_win_privesc_stored_credentials_winlogon: true
-          ludus_win_privesc_leaked_creds_ps_history: true
-          ludus_win_privesc_leaked_creds_git: true
-          ludus_win_privesc_answer_files: true
-          ludus_win_privesc_always_install_elevated: true
-          ludus_win_privesc_weak_startup_folder: true
-          ludus_win_privesc_weak_registry_run_key: true
-          ludus_win_privesc_uac_bypass_setup: true
+      # ══════════════════════════════════════════════════════════════════════
+      # Per-scenario identity mapping (same as the standalone example, but
+      # these identities now correspond to REAL accounts in corp.local AD)
+      # ══════════════════════════════════════════════════════════════════════
 
-          # ── Group A: Token Privileges ─────────────────────────────────────────
-          ludus_win_privesc_sedebug: true
-          ludus_win_privesc_serestore: true
-          ludus_win_privesc_setakeownership: true
-          ludus_win_privesc_seloaddriver: true
-          ludus_win_privesc_semanagevolume: true
-          ludus_win_privesc_backup_operators_group: true
-          ludus_win_privesc_server_operators_group: true 
+      ludus_win_privesc_winlogon_user: "helpdesk-svc"
+      ludus_win_privesc_winlogon_password: "HelpD3sk!2024"
 
-          # ── Group B: Registry / Security Config ───────────────────────────────
-          ludus_win_privesc_wdigest_enabled: true
-          ludus_win_privesc_wsus_http: true
-          ludus_win_privesc_applocker_disabled: true
-          ludus_win_privesc_applocker_weak_rules: false
+      ludus_win_privesc_ps_history_user: "ldap-bind"
+      ludus_win_privesc_ps_history_password: "Ldap@Bind#2024"
 
-          # ── Group C: Path / File ──────────────────────────────────────────────
-          ludus_win_privesc_dll_hijacking_path: true
-          ludus_win_privesc_dll_hijack_dir: "C:\\DevUtils"
-          ludus_win_privesc_gpp_cpassword: true
-          ludus_win_privesc_wifi_profile: true
-          ludus_win_privesc_ssh_private_keys: true
-          ludus_win_privesc_office_creds: true
+      ludus_win_privesc_git_user: "postgres"
+      ludus_win_privesc_git_password: "DB@Postgres2024!"
+      ludus_win_privesc_git_dev_name: "Jane Doe"
+      ludus_win_privesc_git_email: "j.doe@corp.local"
+
+      ludus_win_privesc_files_user: "postgres"
+      ludus_win_privesc_files_password: "DB@Postgres2024!"
+
+      ludus_win_privesc_unattend_user: "image-build"
+      ludus_win_privesc_unattend_password: "Im@ge2024!"
+
+      ludus_win_privesc_office_admin_user: "helpdesk-svc"
+      ludus_win_privesc_office_admin_password: "HelpD3sk!2024"
+      ludus_win_privesc_office_dc_user: "domainadmin"
+      ludus_win_privesc_office_dc_password: "DA-Real-Pw-2024!"
+      ludus_win_privesc_office_veeam_user: "veeam-repo-user"
+      ludus_win_privesc_office_veeam_password: "Veeam@Repo2024"
+      ludus_win_privesc_office_linux_user: "veeam-repo-user"
+      ludus_win_privesc_office_linux_password: "Veeam@Repo2024"
+
+      # Internal infrastructure — point references at real hosts in this
+      # range so known_hosts, ssh config, and IT notes line up with what
+      # the attacker can actually scan on the network.
+      ludus_win_privesc_internal_domain_fqdn: "corp.local"
+      ludus_win_privesc_internal_dc_host: "dc01.corp.local"
+      ludus_win_privesc_internal_dc_ip: "10.2.10.10"   # adjust to your range_id
+      ludus_win_privesc_internal_fileserver_host: "fs01.corp.local"
+      ludus_win_privesc_internal_fileserver_ip: "10.2.10.20"
+
+network:
+  inter_vlan_default: ACCEPT
 ```
+
+With this configuration, an attacker who recovers the Winlogon password
+gets `helpdesk-svc` — a limited account that can RDP to workstations but
+not to servers or the DC. The git history reveals `postgres`, useful for
+hitting databases but nothing else. To reach Domain Admin they have to
+*chain* across discoveries — e.g. use the helpdesk account to RDP into
+this workstation, find the office docs in `C:\IT\`, and only then read
+the DA password out of `IT-Server-Credentials.txt`.
+
+The `ludus_win_privesc_internal_*_ip` values use `10.2.10.x` because Ludus
+does not expand `{{ range_id }}` inside `role_vars` strings — adjust the
+second octet to your actual range_id (e.g. `10.42.10.10` for range 42).
+
+```yaml
+ludus:
+  # ──────────────────────────────────────────────────────────────────────────
+  # Domain Controller — creates the identities the privesc role will reference
+  # ──────────────────────────────────────────────────────────────────────────
+  - vm_name: "{{ range_id }}-corp-dc"
+    hostname: "DC01"
+    template: win2022-server-x64-template
+    vlan: 10
+    ip_last_octet: 10
+    ram_gb: 4
+    cpus: 2
+    windows:
+      sysprep: true
+    domain:
+      fqdn: corp.local
+      role: primary-dc
+    roles:
+      - ludus_ad_group_all
+    role_vars:
+      ludus_ad:
+        users:
+          # Domain Admin — the prize. Should ONLY be discoverable via the
+          # office_dc_* office_creds entry.
+          - name: domainadmin
+            firstname: Domain
+            surname: Admin
+            display_name: Domain Admin
+            password: "DA-Real-Pw-2024!"
+            path: "DC=corp,DC=local"
+            groups: [Domain Users, Domain Admins]
+
+          # Help desk service account — reachable via the Winlogon AutoLogon
+          # registry plant. Limited blast radius (no DA, no remote admin).
+          - name: helpdesk-svc
+            firstname: Helpdesk
+            surname: Service
+            display_name: Helpdesk Service
+            password: "HelpD3sk!2024"
+            path: "DC=corp,DC=local"
+            groups: [Domain Users]
+
+          # LDAP bind account — appears in PowerShell history. Read-only on
+          # AD; useful for enumeration but not direct compromise.
+          - name: ldap-bind
+            firstname: LDAP
+            surname: Bind
+            display_name: LDAP Bind
+            password: "Ldap@Bind#2024"
+            path: "DC=corp,DC=local"
+            groups: [Domain Users]
+
+          # Image-build account — appears in Unattend.xml. Local admin on
+          # workstations during deployment, no domain rights.
+          - name: image-build
+            firstname: Image
+            surname: Build
+            display_name: Image Build
+            password: "Im@ge2024!"
+            path: "DC=corp,DC=local"
+            groups: [Domain Users]
+
+          # Veeam repo account — appears in the Office docs. Gives SSH to a
+          # backup repo (which would be a separate VM in your real lab).
+          - name: veeam-repo-user
+            firstname: Veeam
+            surname: Repo
+            display_name: Veeam Repo
+            password: "Veeam@Repo2024"
+            path: "DC=corp,DC=local"
+            groups: [Domain Users]
+
+          # The victim user — what the foothold lands as.
+          - name: lowpriv
+            firstname: Low
+            surname: Priv
+            display_name: Low Priv
+            password: "Password123!"
+            path: "DC=corp,DC=local"
+            groups: [Domain Users]
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Workstation — runs ludus_win_privesc with per-scenario identity mapping
+  # ──────────────────────────────────────────────────────────────────────────
+  - vm_name: "{{ range_id }}-corp-ws01"
+    hostname: "WS01"
+    template: win11-22h2-x64-enterprise-template
+    vlan: 10
+    ip_last_octet: 11
+    ram_gb: 4
+    cpus: 2
+    windows:
+      sysprep: true
+    domain:
+      fqdn: corp.local
+      role: member
+    roles:
+      - name: mojeda101.ludus_win_privesc
+        depends_on:
+          - vm_name: "{{ range_id }}-corp-dc"
+            role: ludus_ad_group_all
+    role_vars:
+      # ── Victim & shared admin ────────────────────────────────────────────
+      ludus_win_privesc_victim_user_type: "domain"
+      ludus_win_privesc_victim_user: "lowpriv"
+      ludus_win_privesc_create_domain_user: false  # already created above
+      ludus_win_privesc_admin_user: "Administrator"
+      ludus_win_privesc_admin_password: "P@ssw0rd123!"
+
+      # ── All scenarios on (defaults) ──────────────────────────────────────
+      # uac_bypass_setup off because it requires the victim to be local admin,
+      # which contradicts the "domain low-priv user" foothold.
+      ludus_win_privesc_uac_bypass_setup: false
+
+      # ══════════════════════════════════════════════════════════════════════
+      # Per-scenario identity mapping: each credential-discovery scenario
+      # leaks a DIFFERENT real account from corp.local.
+      # ══════════════════════════════════════════════════════════════════════
+
+      # Winlogon AutoLogon — IT left the helpdesk-svc password in the registry
+      # so they could remote in for break/fix. Discovered via:
+      #   reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+      ludus_win_privesc_winlogon_user: "helpdesk-svc"
+      ludus_win_privesc_winlogon_password: "HelpD3sk!2024"
+
+      # PowerShell history — a previous session ran a script that bound to
+      # AD with the ldap-bind account. Discovered via:
+      #   type $env:APPDATA\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt
+      ludus_win_privesc_ps_history_user: "ldap-bind"
+      ludus_win_privesc_ps_history_password: "Ldap@Bind#2024"
+
+      # Git repo — a developer committed a Postgres password, then "removed"
+      # it in a follow-up commit. Discovered via:
+      #   cd C:\DevProjects\WebApp; git log -p --all | findstr /i password
+      ludus_win_privesc_git_user: "postgres"
+      ludus_win_privesc_git_password: "DB@Postgres2024!"
+      ludus_win_privesc_git_dev_name: "Jane Doe"
+      ludus_win_privesc_git_email: "j.doe@corp.local"
+
+      # Config files (.env, .config, .json, .ini, .ps1, etc.) — same
+      # postgres credentials sprayed across many file types.
+      ludus_win_privesc_files_user: "postgres"
+      ludus_win_privesc_files_password: "DB@Postgres2024!"
+
+      # Unattend.xml — leftover from imaging. Local admin only, no domain
+      # privileges, but useful for lateral movement to other workstations
+      # built from the same image.
+      ludus_win_privesc_unattend_user: "image-build"
+      ludus_win_privesc_unattend_password: "Im@ge2024!"
+
+      # Office docs — IT team password notes. The DC row leaks the actual
+      # Domain Admin; the Veeam row leaks the backup repo SSH user.
+      ludus_win_privesc_office_admin_user: "helpdesk-svc"
+      ludus_win_privesc_office_admin_password: "HelpD3sk!2024"
+      ludus_win_privesc_office_dc_user: "domainadmin"
+      ludus_win_privesc_office_dc_password: "DA-Real-Pw-2024!"
+      ludus_win_privesc_office_veeam_user: "veeam-repo-user"
+      ludus_win_privesc_office_veeam_password: "Veeam@Repo2024"
+      ludus_win_privesc_office_linux_user: "veeam-repo-user"
+      ludus_win_privesc_office_linux_password: "Veeam@Repo2024"
+
+      # Internal infrastructure — point references at real hosts in this
+      # range so known_hosts, ssh config, and IT notes line up with what
+      # the attacker can actually scan on the network.
+      ludus_win_privesc_internal_domain_fqdn: "corp.local"
+      ludus_win_privesc_internal_dc_host: "dc01.corp.local"
+      ludus_win_privesc_internal_dc_ip: "10.2.10.10"   # adjust to your range_id
+      ludus_win_privesc_internal_fileserver_host: "fs01.corp.local"
+      ludus_win_privesc_internal_fileserver_ip: "10.2.10.20"
+
+network:
+  inter_vlan_default: ACCEPT
+```
+
+With this configuration, an attacker who recovers the Winlogon password
+gets `helpdesk-svc` — a limited account that can RDP to workstations but
+not to servers or the DC. The git history reveals `postgres`, useful for
+hitting databases but nothing else. To reach Domain Admin they have to
+*chain* across discoveries — e.g. use the helpdesk account to RDP into
+this workstation, find the office docs in `C:\IT\`, and only then read
+the DA password out of `IT-Server-Credentials.txt`.
+
+The `ludus_win_privesc_internal_*_ip` values use `10.2.10.x` because Ludus
+does not expand `{{ range_id }}` inside `role_vars` strings — adjust the
+second octet to your actual range_id (e.g. `10.42.10.10` for range 42).
+
+### Special characters in credential values
+
+The role embeds your `_office_*` / `_admin_*` / `_internal_*` values into
+PowerShell scripts that are sent through Ansible's `win_shell`. A handful
+of characters have special meaning in either layer and can cause silent
+corruption or hard deploy failures when they appear in passwords:
+
+| Character | Symptom | Notes |
+|---|---|---|
+| `$` followed by a letter | Silent truncation. `Sql$Admin2024!` becomes `Sql!` in some files (PowerShell expands `$Admin2024` as a variable reference and finds nothing). | Hits `deploy.ps1` written by the random-folder block. The `.docx`, `.txt`, `.csv` artifacts written via `win_copy: content:` are unaffected. |
+| `'` (single quote) | Ansible "failed at splitting arguments" error at deploy time, or PowerShell parse errors in the rendered shell script. | Always avoid in passwords. |
+| `"` (double quote) | Breaks PS double-quoted strings the same way `'` breaks single-quoted ones. | Always avoid. |
+| `` ` `` (backtick) | PS escape character — eaten silently or escapes the next character. | Always avoid. |
+
+**Recommended safe character set for passwords**: alphanumerics plus
+`! @ # % ^ & * ( ) - _ + = . , ; : ?`. Avoid `$ ' " \``.
+
+This isn't great — a real ransomware lab benefits from realistic-looking
+passwords, and `$` is common in real passwords. The role accepts the
+constraint as a known limitation rather than introducing complex escape
+machinery that creates its own deploy-time fragility. If you really need
+`$`-bearing passwords in the planted artifacts, the `win_copy: content:`
+artifacts (Passwoerter.txt, IT-Server-Credentials.txt, the CSVs) handle
+them correctly — only the `deploy.ps1` and Winlogon-registry plants are
+affected by the truncation.
+
+### Scenarios that cannot be customized
+
+A few scenarios have credentials baked in and cannot be overridden:
+
+- **`hardcoded_creds_dotnet`** — the `CustomDotNetApp.exe` is downloaded
+  pre-compiled from the cookbook repo. The strings inside are fixed.
+  Discovered creds are good for practicing the *technique* (dnSpy,
+  `strings`) but won't authenticate to anything else in your lab.
+- **`gpp_cpassword`** — the `cpassword` value uses the publicly known
+  AES key from MS14-025 and decrypts to `Password123!` by definition.
+  Changing it breaks the decryption demo.
+
+These limitations are noted in the relevant task files.
+
+---
+
+## Dependencies
+
+None.
+
+---
+
 
 ---
 

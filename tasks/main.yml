@@ -153,6 +153,24 @@
       - Users
   when: ludus_win_privesc_victim_user_type == 'local'
 
+- name: Resolve victim user profile path (handles lowpriv.WIN11 on domain-joined machines)
+  ansible.windows.win_shell: |
+    $profile = (Get-WmiObject Win32_UserProfile |
+      Where-Object { $_.LocalPath -like "*{{ ludus_win_privesc_victim_user }}*" } |
+      Select-Object -First 1).LocalPath
+    if ($profile) { Write-Output $profile }
+    else { Write-Output "C:\Users\{{ ludus_win_privesc_victim_user }}" }
+  register: _victim_profile_path
+  changed_when: false
+
+- name: Set victim profile path fact
+  ansible.builtin.set_fact:
+    ludus_win_privesc_victim_profile: "{{ _victim_profile_path.stdout | trim }}"
+
+- name: Show resolved victim profile path
+  ansible.builtin.debug:
+    msg: "Victim profile path: {{ ludus_win_privesc_victim_profile }}"
+
 - name: Add victim user to Remote Desktop Users (required for RDP when not Administrator)
   ansible.windows.win_shell: |
     $grp = Get-CimInstance -ClassName Win32_Group -Filter 'SID="S-1-5-32-555"' -ErrorAction Stop
@@ -331,3 +349,11 @@
 - name: Include Office Documents with Credentials scenario
   ansible.builtin.include_tasks: office_creds.yml
   when: ludus_win_privesc_office_creds | bool
+
+- name: Include PrintNightmare scenario
+  ansible.builtin.include_tasks: printnightmare.yml
+  when: ludus_win_privesc_printnightmare | bool
+
+- name: Include Leaked Credentials in Files scenario
+  ansible.builtin.include_tasks: leaked_creds_files.yml
+  when: ludus_win_privesc_leaked_creds_files | bool

@@ -1,0 +1,70 @@
+---
+# PrintNightmare Lab Setup (CVE-2021-34527)
+# Keeps the Print Spooler service running and weakens Point and Print
+# policies to allow non-admin driver installation — the precondition
+# for PrintNightmare exploitation.
+#
+# Exploit: SpoolFool, Invoke-Nightmare, cube0x0/CVE-2021-1675
+# Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook
+
+# ═══ SCENARIO 31 — PrintNightmare ═══
+
+- name: PrintNightmare — ensure Print Spooler is running
+  ansible.windows.win_service:
+    name: Spooler
+    start_mode: auto
+    state: started
+
+- name: PrintNightmare — weaken Point and Print policy
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Printers\PointAndPrint
+    name: "{{ item.name }}"
+    data: "{{ item.data }}"
+    type: dword
+    state: present
+  loop:
+    - { name: NoWarningNoElevationOnInstall,           data: 1 }
+    - { name: UpdatePromptSettings,                    data: 2 }
+    - { name: RestrictDriverInstallationToAdministrators, data: 0 }
+
+- name: Validate Print Spooler is running
+  ansible.windows.win_shell: |
+    $svc = Get-Service -Name Spooler -ErrorAction SilentlyContinue
+    if ($svc.Status -eq "Running") { Write-Output "OK" } else { Write-Output "FAIL" }
+  register: _spooler_validate
+  tags: validate
+
+- name: Assert Print Spooler is running
+  ansible.builtin.fail:
+    msg: >
+      PrintNightmare scenario validation failed —
+      Print Spooler (Spooler) service is not running.
+  when: _spooler_validate.stdout | trim != "OK"
+  tags: validate
+
+- name: Validate Point and Print registry keys
+  ansible.windows.win_reg_stat:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Printers\PointAndPrint
+    name: RestrictDriverInstallationToAdministrators
+  register: _pnp_validate
+  tags: validate
+
+- name: Assert Point and Print is weakened
+  ansible.builtin.fail:
+    msg: >
+      PrintNightmare scenario validation failed —
+      RestrictDriverInstallationToAdministrators is not set to 0.
+  when: not _pnp_validate.exists or _pnp_validate.value != 0
+  tags: validate
+
+- name: Print PrintNightmare scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== PrintNightmare Scenario (CVE-2021-34527) ==="
+      - "Print Spooler: running"
+      - "NoWarningNoElevationOnInstall: 1"
+      - "UpdatePromptSettings: 2"
+      - "RestrictDriverInstallationToAdministrators: 0"
+      - "Exploit: Invoke-Nightmare -NewUser pwnd -NewPassword 'Pwnd1234!'"
+      - "         SpoolFool.exe"
+      - "Reference: https://github.com/cube0x0/CVE-2021-1675"

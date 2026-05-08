@@ -1,0 +1,307 @@
+---
+# Leaked Credentials in Various File Types
+# Deploys realistic config/script files containing admin credentials
+# in common file types and locations that credential-hunting tools look for.
+#
+# File types mirror real-world findings: .env, .config, .xml, .json,
+# .ps1, .py, .sql, .yml, .ini, .tfvars etc.
+#
+# Detection: search for password keywords across common extensions
+#   findstr /si "passw secret credential kennw" *.env *.config *.xml *.json *.ini *.ps1 *.py *.sql *.yml
+#   Get-ChildItem -Recurse | Select-String -Pattern "passw|secret|credential" -CaseSensitive:$false
+
+# ═══ SCENARIO 32 — Leaked Credentials in Various File Types ═══
+
+- name: Create credential file drop directories
+  ansible.windows.win_file:
+    path: "{{ item }}"
+    state: directory
+  loop:
+    - C:\inetpub\wwwroot\App_Data
+    - C:\Apps\WebApp\App_Data
+    - C:\Apps\WebApp\config
+    - C:\Deploy\scripts
+    - C:\Backup\db
+    - C:\IT\terraform
+
+- name: Deploy .env file with credentials
+  ansible.windows.win_copy:
+    content: |
+      # Application environment config
+      APP_ENV=production
+      APP_DEBUG=false
+      APP_SECRET={{ ludus_win_privesc_files_password }}
+
+      DB_HOST={{ ludus_win_privesc_internal_db_host }}
+      DB_PORT=1433
+      DB_NAME=AppDB
+      DB_USERNAME={{ ludus_win_privesc_files_user }}
+      DB_PASSWORD={{ ludus_win_privesc_files_password }}
+
+      ADMIN_USER={{ ludus_win_privesc_files_user }}
+      ADMIN_PASSWORD={{ ludus_win_privesc_files_password }}
+
+      # SMTP
+      MAIL_PASSWORD={{ ludus_win_privesc_files_password }}
+    dest: C:\Apps\WebApp\config\.env
+
+- name: Deploy .config file (ASP.NET style) with credentials
+  ansible.windows.win_copy:
+    content: |
+      <?xml version="1.0" encoding="utf-8"?>
+      <configuration>
+        <connectionStrings>
+          <add name="DefaultConnection"
+               connectionString="Data Source={{ ludus_win_privesc_internal_db_host }};Initial Catalog=AppDB;User Id={{ ludus_win_privesc_files_user }};Password={{ ludus_win_privesc_files_password }};"
+               providerName="System.Data.SqlClient" />
+        </connectionStrings>
+        <appSettings>
+          <add key="AdminUser" value="{{ ludus_win_privesc_files_user }}" />
+          <add key="AdminPassword" value="{{ ludus_win_privesc_files_password }}" />
+          <add key="SecretKey" value="{{ ludus_win_privesc_files_password }}" />
+        </appSettings>
+        <system.net>
+          <mailSettings>
+            <smtp>
+              <network host="{{ ludus_win_privesc_internal_mail_host }}" userName="{{ ludus_win_privesc_files_user }}"
+                       password="{{ ludus_win_privesc_files_password }}" />
+            </smtp>
+          </mailSettings>
+        </system.net>
+      </configuration>
+    dest: C:\Apps\WebApp\config\Web.config
+
+- name: Deploy .json config with credentials
+  ansible.windows.win_copy:
+    content: |
+      {
+        "database": {
+          "host": "{{ ludus_win_privesc_internal_db_host }}",
+          "port": 1433,
+          "name": "AppDB",
+          "username": "{{ ludus_win_privesc_files_user }}",
+          "password": "{{ ludus_win_privesc_files_password }}"
+        },
+        "admin": {
+          "username": "{{ ludus_win_privesc_files_user }}",
+          "password": "{{ ludus_win_privesc_files_password }}",
+          "secret": "{{ ludus_win_privesc_files_password }}"
+        },
+        "smtp": {
+          "host": "{{ ludus_win_privesc_internal_mail_host }}",
+          "username": "{{ ludus_win_privesc_files_user }}",
+          "password": "{{ ludus_win_privesc_files_password }}"
+        }
+      }
+    dest: C:\Apps\WebApp\config\appsettings.json
+
+- name: Deploy .yml config with credentials
+  ansible.windows.win_copy:
+    content: |
+      database:
+        host: {{ ludus_win_privesc_internal_db_host }}
+        port: 1433
+        username: {{ ludus_win_privesc_files_user }}
+        password: {{ ludus_win_privesc_files_password }}
+
+      admin:
+        username: {{ ludus_win_privesc_files_user }}
+        password: {{ ludus_win_privesc_files_password }}
+
+      smtp:
+        host: {{ ludus_win_privesc_internal_mail_host }}
+        username: {{ ludus_win_privesc_files_user }}
+        password: {{ ludus_win_privesc_files_password }}
+        secret: {{ ludus_win_privesc_files_password }}
+    dest: C:\Apps\WebApp\config\config.yml
+
+- name: Deploy .ini file with credentials
+  ansible.windows.win_copy:
+    content: |
+      [database]
+      host={{ ludus_win_privesc_internal_db_host }}
+      username={{ ludus_win_privesc_files_user }}
+      password={{ ludus_win_privesc_files_password }}
+
+      [credentials]
+      admin_user={{ ludus_win_privesc_files_user }}
+      admin_pass={{ ludus_win_privesc_files_password }}
+      secret={{ ludus_win_privesc_files_password }}
+      pw={{ ludus_win_privesc_files_password }}
+    dest: C:\Apps\WebApp\config\settings.ini
+
+- name: Deploy .ps1 script with credentials
+  ansible.windows.win_copy:
+    content: |
+      # Server management script
+      # Author: IT Admin
+
+      $adminUser = '{{ ludus_win_privesc_files_user }}'
+      $adminPass = '{{ ludus_win_privesc_files_password }}'
+      $securePass = ConvertTo-SecureString $adminPass -AsPlainText -Force
+      $credential = New-Object System.Management.Automation.PSCredential($adminUser, $securePass)
+
+      # Connect via PSExec
+      # psexec \\server -u $adminUser -p $adminPass cmd
+
+      # CMDKEY stored credential
+      # cmdkey /add:server.lab.local /user:$adminUser /pass:$adminPass
+
+      # Scheduled task with credentials
+      # schtasks /create /tn "BackupTask" /ru $adminUser /rp $adminPass /tr "backup.bat"
+
+      # Net use with credentials
+      # net use \\\\fileserver\\share /user:$adminUser $adminPass
+
+      Invoke-Command -ComputerName {{ ludus_win_privesc_internal_dc_host }} -Credential $credential -ScriptBlock {
+          Get-Service | Where-Object Status -eq Running
+      }
+    dest: C:\Deploy\scripts\manage-servers.ps1
+
+- name: Deploy .py script with credentials
+  ansible.windows.win_copy:
+    content: |
+      #!/usr/bin/env python3
+      # Database maintenance script
+
+      import pyodbc
+      import psycopg2
+
+      # SQL Server connection
+      conn_str = (
+          "DRIVER={SQL Server};"
+          "SERVER={{ ludus_win_privesc_internal_db_host }};"
+          "DATABASE=AppDB;"
+          "UID={{ ludus_win_privesc_files_user }};"
+          "PWD={{ ludus_win_privesc_files_password }}"
+      )
+      conn = pyodbc.connect(conn_str)
+
+      # PostgreSQL connection
+      pg = psycopg2.connect(
+          host="{{ ludus_win_privesc_internal_db_host }}",
+          database="appdb",
+          user="{{ ludus_win_privesc_files_user }}",
+          password="{{ ludus_win_privesc_files_password }}"
+      )
+
+      USERNAME = "{{ ludus_win_privesc_files_user }}"
+      PASSWORD = "{{ ludus_win_privesc_files_password }}"
+    dest: C:\Deploy\scripts\db_maintenance.py
+
+- name: Deploy .sql file with credentials in comments
+  ansible.windows.win_copy:
+    content: |
+      -- Database setup script
+      -- Connection: Server={{ ludus_win_privesc_internal_db_host }};User={{ ludus_win_privesc_files_user }};Password={{ ludus_win_privesc_files_password }}
+
+      -- Create application user
+      CREATE LOGIN AppUser WITH PASSWORD = '{{ ludus_win_privesc_files_password }}';
+
+      -- Admin credentials for linked server
+      EXEC sp_addlinkedsrvlogin
+          @rmtsrvname = 'db2.lab.local',
+          @useself = 'FALSE',
+          @locallogin = NULL,
+          @rmtuser = '{{ ludus_win_privesc_files_user }}',
+          @rmtpassword = '{{ ludus_win_privesc_files_password }}';
+    dest: C:\Backup\db\setup.sql
+
+- name: Deploy .tfvars file with credentials
+  ansible.windows.win_copy:
+    content: |
+      # Terraform variables - DO NOT COMMIT
+      admin_username     = "{{ ludus_win_privesc_files_user }}"
+      admin_password     = "{{ ludus_win_privesc_files_password }}"
+      db_admin_user      = "{{ ludus_win_privesc_files_user }}"
+      db_admin_password  = "{{ ludus_win_privesc_files_password }}"
+      secret_key         = "{{ ludus_win_privesc_files_password }}"
+      winrm_password     = "{{ ludus_win_privesc_files_password }}"
+    dest: C:\IT\terraform\terraform.tfvars
+
+- name: Deploy .log file with credential leak
+  ansible.windows.win_copy:
+    content: |
+      2024-01-15 08:23:11 [INFO ] Application starting...
+      2024-01-15 08:23:12 [INFO ] Connecting to database {{ ludus_win_privesc_internal_db_host }}
+      2024-01-15 08:23:12 [DEBUG] ConnectionString: Server={{ ludus_win_privesc_internal_db_host }};User Id={{ ludus_win_privesc_files_user }};Password={{ ludus_win_privesc_files_password }};
+      2024-01-15 08:23:13 [INFO ] Database connection established
+      2024-01-15 08:23:14 [INFO ] Authenticating user: {{ ludus_win_privesc_files_user }}
+      2024-01-15 08:23:14 [DEBUG] Auth params: username={{ ludus_win_privesc_files_user }} password={{ ludus_win_privesc_files_password }}
+      2024-01-15 08:23:14 [INFO ] Authentication successful
+      2024-01-15 08:23:15 [INFO ] Application ready
+    dest: C:\Apps\WebApp\App_Data\app.log
+
+- name: Deploy .txt notes file with credentials
+  ansible.windows.win_copy:
+    content: |
+      Server Access Notes
+      ===================
+      Last updated: 2024-01-15
+
+      Production Credentials
+      ----------------------
+      Admin User     : {{ ludus_win_privesc_files_user }}
+      Admin Password : {{ ludus_win_privesc_files_password }}
+      Kennwort       : {{ ludus_win_privesc_files_password }}
+      Zugangsdaten   : {{ ludus_win_privesc_files_user }} / {{ ludus_win_privesc_files_password }}
+
+      Database
+      --------
+      Connection: {{ ludus_win_privesc_internal_db_host }}
+      Username: {{ ludus_win_privesc_files_user }}
+      Password: {{ ludus_win_privesc_files_password }}
+    dest: C:\IT\server-notes.txt
+
+- name: Set world-readable permissions on credential drop dirs
+  ansible.windows.win_shell: |
+    $dirs = @(
+      "C:\Apps\WebApp\config",
+      "C:\Deploy\scripts",
+      "C:\Backup\db",
+      "C:\IT\terraform",
+      "C:\IT\server-notes.txt"
+    )
+    foreach ($d in $dirs) {
+      cmd /c icacls "$d" /grant "{{ ludus_win_privesc_victim_user }}:(OI)(CI)R" 2>$null | Out-Null
+    }
+    Write-Output "OK"
+
+- name: Validate credential files exist
+  ansible.windows.win_shell: |
+    $files = @(
+      "C:\Apps\WebApp\config\.env",
+      "C:\Apps\WebApp\config\Web.config",
+      "C:\Apps\WebApp\config\appsettings.json",
+      "C:\Apps\WebApp\config\config.yml",
+      "C:\Apps\WebApp\config\settings.ini",
+      "C:\Deploy\scripts\manage-servers.ps1",
+      "C:\Deploy\scripts\db_maintenance.py",
+      "C:\Backup\db\setup.sql",
+      "C:\IT\terraform\terraform.tfvars",
+      "C:\IT\server-notes.txt"
+    )
+    $missing = $files | Where-Object { -not (Test-Path $_) }
+    if ($missing) { Write-Output "FAIL: $($missing -join ', ')" }
+    else { Write-Output "OK: $($files.Count) credential files deployed" }
+  register: _leaked_files_validate
+  tags: validate
+
+- name: Assert credential files are deployed
+  ansible.builtin.fail:
+    msg: "Leaked credentials file scenario failed — {{ _leaked_files_validate.stdout | trim }}"
+  when: not (_leaked_files_validate.stdout | trim).startswith('OK')
+  tags: validate
+
+- name: Print leaked credentials files scenario info
+  ansible.builtin.debug:
+    msg:
+      - "=== Leaked Credentials in Files Scenario ==="
+      - "{{ _leaked_files_validate.stdout | trim }}"
+      - "Locations: C:\\Apps\\WebApp\\config\\ | C:\\Deploy\\scripts\\ | C:\\Backup\\db\\ | C:\\IT\\"
+      - "File types: .env .config .json .yml .ini .ps1 .py .sql .tfvars .log .txt"
+      - "Enumerate:"
+      - "  findstr /si \"passw secret credential kennw pw=\" C:\\Apps\\*.* C:\\Deploy\\*.* C:\\IT\\*.*"
+      - "  Get-ChildItem C:\\ -Recurse -Include *.env,*.config,*.json,*.ini,*.ps1,*.py,*.sql,*.tfvars |"
+      - "    Select-String -Pattern 'passw|secret|credential|kennw|pw=' -CaseSensitive:$false"
+

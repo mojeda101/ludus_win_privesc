@@ -41,7 +41,7 @@
 
 - name: Create victim Desktop directory (may not exist before first logon)
   ansible.windows.win_file:
-    path: "C:\\Users\\{{ ludus_win_privesc_victim_user }}\\Desktop"
+    path: "{{ ludus_win_privesc_victim_profile }}\\Desktop"
     state: directory
 
 # ── Plaintext password files ──────────────────────────────────────────────────
@@ -54,22 +54,22 @@
 
       Server / Systeme
       ----------------
-      Administrator   : {{ ludus_win_privesc_admin_password }}
-      lowpriv         : {{ ludus_win_privesc_victim_password }}
-      SQL Server SA   : Sql$Admin2024!
-      Backup-Account  : B@ckup2023sicher
+      {{ ludus_win_privesc_office_admin_user }}   : {{ ludus_win_privesc_office_admin_password }}
+      {{ ludus_win_privesc_victim_user }}         : {{ ludus_win_privesc_victim_password }}
+      SQL Server SA   : {{ ludus_win_privesc_office_sql_password }}
+      {{ ludus_win_privesc_office_backup_user }}  : {{ ludus_win_privesc_office_backup_password }}
 
       Netzwerk
       --------
-      Router Admin    : router@lab123
-      WLAN LabNetwork : LabWifiSecret99!
+      Router Admin    : {{ ludus_win_privesc_office_router_password }}
+      WLAN {{ ludus_win_privesc_office_wifi_corp_ssid }} : {{ ludus_win_privesc_office_wifi_corp_password }}
       WLAN Gast       : Gast2024!
 
       Dienste
       -------
-      WSUS            : wsus_svc_P@ss!
+      WSUS            : {{ ludus_win_privesc_office_wsus_password }}
       Monitoring      : mon!tor2024
-    dest: "C:\\Users\\{{ ludus_win_privesc_victim_user }}\\Desktop\\Passwoerter.txt"
+    dest: "{{ ludus_win_privesc_victim_profile }}\\Desktop\\Passwoerter.txt"
 
 - name: Drop IT-Server-Credentials.txt in C:\IT
   ansible.windows.win_copy:
@@ -81,46 +81,46 @@
 
       WINDOWS HOSTS
       -------------
-      Host            : WIN2022.lab.local
-      Admin User      : {{ ludus_win_privesc_admin_user }}
-      Admin Password  : {{ ludus_win_privesc_admin_password }}
-      RDP Port        : 3389
+      Host            : {{ ludus_win_privesc_internal_dc_host }}
+      Admin User      : {{ ludus_win_privesc_office_dc_user }}
+      Admin Password  : {{ ludus_win_privesc_office_dc_password }}
+      Domain          : {{ ludus_win_privesc_internal_domain_fqdn }}
 
-      Host            : DC01.lab.local
-      Admin User      : Administrator
-      Admin Password  : DC@dmin2024!
-      Domain          : lab.local
+      Host            : {{ ludus_win_privesc_internal_fileserver_host }}
+      Admin User      : {{ ludus_win_privesc_office_admin_user }}
+      Admin Password  : {{ ludus_win_privesc_office_admin_password }}
+      RDP Port        : 3389
 
       LINUX HOSTS
       -----------
-      Host            : linuxdev.lab.local (10.10.10.30)
-      Root Password   : Tux$ecure2024
+      Host            : {{ ludus_win_privesc_internal_linux_host }} ({{ ludus_win_privesc_internal_linux_ip }})
+      Root Password   : {{ ludus_win_privesc_office_linux_password }}
       SSH Key         : C:\Temp\backup_jumpbox_key
 
       DATABASES
       ---------
-      SQL Server      : db.lab.local,1433
-      SA Password     : Sql$Admin2024!
+      SQL Server      : {{ ludus_win_privesc_internal_db_host }},{{ ludus_win_privesc_internal_db_port }}
+      SA Password     : {{ ludus_win_privesc_office_sql_password }}
       App DB User     : appuser / App@DB2023
 
       SERVICES
       --------
-      Veeam Backup    : veeam_svc / V33m@Backup!
+      Veeam Backup    : {{ ludus_win_privesc_office_veeam_user }} / {{ ludus_win_privesc_office_veeam_password }}
       Monitoring      : svc_monitor / Mon!t0r2024
-      WSUS Service    : svc_wsus / wsus_svc_P@ss!
+      WSUS Service    : {{ ludus_win_privesc_office_wsus_user }} / {{ ludus_win_privesc_office_wsus_password }}
     dest: "C:\\IT\\IT-Server-Credentials.txt"
 
 - name: Drop credentials CSV (fake password manager export)
   ansible.windows.win_copy:
     content: |
       name,url,username,password,notes
-      "Lab DC01","rdp://dc01.lab.local","Administrator","DC@dmin2024!","Domain Controller"
-      "SQL Server","mssql://db.lab.local","sa","Sql$Admin2024!","Production DB"
-      "WIN2022 Admin","rdp://10.10.10.50","Administrator","{{ ludus_win_privesc_admin_password }}","PrivEsc Lab"
-      "Veeam Backup","https://veeam.lab.local","veeam_svc","V33m@Backup!","Backup server"
-      "WSUS","http://wsus.lab.local:8530","svc_wsus","wsus_svc_P@ss!","Update server"
-      "Linux Dev","ssh://10.10.10.30","root","Tux$ecure2024","Dev server"
-      "WiFi Lab","","","LabWifiSecret99!","SSID: LabNetwork"
+      "Lab DC","rdp://{{ ludus_win_privesc_internal_dc_host }}","{{ ludus_win_privesc_office_dc_user }}","{{ ludus_win_privesc_office_dc_password }}","Domain Controller"
+      "SQL Server","mssql://{{ ludus_win_privesc_internal_db_host }}","sa","{{ ludus_win_privesc_office_sql_password }}","Production DB"
+      "Fileserver Admin","rdp://{{ ludus_win_privesc_internal_fileserver_host }}","{{ ludus_win_privesc_office_admin_user }}","{{ ludus_win_privesc_office_admin_password }}","Fileserver"
+      "Veeam Backup","https://{{ ludus_win_privesc_internal_veeam_host }}","{{ ludus_win_privesc_office_veeam_user }}","{{ ludus_win_privesc_office_veeam_password }}","Backup server"
+      "WSUS","http://wsus.{{ ludus_win_privesc_internal_domain_fqdn }}:8530","{{ ludus_win_privesc_office_wsus_user }}","{{ ludus_win_privesc_office_wsus_password }}","Update server"
+      "Linux Dev","ssh://{{ ludus_win_privesc_internal_linux_ip }}","{{ ludus_win_privesc_office_linux_user }}","{{ ludus_win_privesc_office_linux_password }}","Dev server"
+      "WiFi Corp","","","{{ ludus_win_privesc_office_wifi_corp_password }}","SSID: {{ ludus_win_privesc_office_wifi_corp_ssid }}"
     dest: "C:\\Users\\Public\\Documents\\passwords_export.csv"
 
 - name: Drop IT notes .txt in Public Documents
@@ -132,7 +132,7 @@
 
       Standard-Passwörter Neuinstallation
       ------------------------------------
-      Windows Admin : {{ ludus_win_privesc_admin_password }}
+      Windows Admin : {{ ludus_win_privesc_office_admin_password }}
       Domain Join   : DomainJoin2024!
       Service Accts : Svc@2024Standard!
 
@@ -144,10 +144,11 @@
       Proxmox Host  : root / Prox@2024!
       vCenter       : administrator@vsphere.local / vSphere2024!
       Firewall      : admin / Fw@llP@ss2024
+      {{ ludus_win_privesc_office_pwmanager_note }}
 
       Notfall-Zugang
       --------------
-      Break-Glass Admin: bgadmin / Br3@kGl@ss!!
+      Break-Glass Admin: {{ ludus_win_privesc_office_breakglass_user }} / {{ ludus_win_privesc_office_breakglass_password }}
     dest: "C:\\Users\\Public\\Documents\\IT-Notizen.txt"
 
 # ── Open XML .docx (kein Word benötigt — Pure PowerShell) ────────────────────
@@ -156,49 +157,79 @@
   ansible.windows.win_copy:
     src: Server-Zugangsdaten.docx
     dest: C:\IT\Server-Zugangsdaten.docx
-    force: false
+    force: true   # always re-copy: previous deploys may have left a
+                  # broken file behind (e.g. from a failed Inject run)
 
-- name: Inject admin password into docx word/document.xml
+- name: Inject credentials into docx word/document.xml
   ansible.windows.win_shell: |
-    # The docx is a ZIP — extract word/document.xml, replace placeholder, repack
+    # Edit the docx in-place using ZipArchive.Update (no extract/repack).
+    # CreateFromDirectory produces archives that some Word versions render
+    # as blank (entry order / encoding-flag mismatch in the OOXML package),
+    # so we modify the original ZIP entry directly instead.
+    Add-Type -Assembly System.IO.Compression
     Add-Type -Assembly System.IO.Compression.FileSystem
+
     $docPath = "C:\IT\Server-Zugangsdaten.docx"
-    $tmp     = "$env:TEMP\docx_patch"
-    Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
-    [System.IO.Compression.ZipFile]::ExtractToDirectory($docPath, $tmp)
+    $zip = [System.IO.Compression.ZipFile]::Open($docPath, [System.IO.Compression.ZipArchiveMode]::Update)
+    try {
+      # OOXML spec uses forward slashes, but archives produced by
+      # CreateFromDirectory on Windows store entries with backslashes.
+      # Try both before giving up.
+      $entry = $zip.GetEntry("word/document.xml")
+      if ($null -eq $entry) { $entry = $zip.GetEntry("word\document.xml") }
+      if ($null -eq $entry) { throw "word/document.xml not found in $docPath (tried both / and \ separators)" }
 
-    $xmlPath = "$tmp\word\document.xml"
-    $xml = [System.IO.File]::ReadAllText($xmlPath)
-    $xml = $xml.Replace("PLACEHOLDER_ADMIN_PASSWORD", "{{ ludus_win_privesc_admin_password }}")
-    [System.IO.File]::WriteAllText($xmlPath, $xml, [System.Text.Encoding]::UTF8)
+      $reader = New-Object System.IO.StreamReader($entry.Open())
+      $xml    = $reader.ReadToEnd()
+      $reader.Close()
 
-    Remove-Item $docPath -Force
-    [System.IO.Compression.ZipFile]::CreateFromDirectory($tmp, $docPath)
-    Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Output "PATCHED"
+      $xml = $xml.Replace("PLACEHOLDER_ADMIN_USER",      "{{ ludus_win_privesc_office_admin_user }}")
+      $xml = $xml.Replace("PLACEHOLDER_ADMIN_PASSWORD",  "{{ ludus_win_privesc_office_admin_password }}")
+      $xml = $xml.Replace("PLACEHOLDER_DC_HOST",         "{{ ludus_win_privesc_internal_dc_host }}")
+      $xml = $xml.Replace("PLACEHOLDER_DC_USER",         "{{ ludus_win_privesc_office_dc_user }}")
+      $xml = $xml.Replace("PLACEHOLDER_DC_PASSWORD",     "{{ ludus_win_privesc_office_dc_password }}")
+      $xml = $xml.Replace("PLACEHOLDER_FILESERVER_HOST", "{{ ludus_win_privesc_internal_fileserver_host }}")
+      $xml = $xml.Replace("PLACEHOLDER_DB_HOST",         "{{ ludus_win_privesc_internal_db_host }}")
+      $xml = $xml.Replace("PLACEHOLDER_DB_PORT",         "{{ ludus_win_privesc_internal_db_port }}")
+      $xml = $xml.Replace("PLACEHOLDER_SQL_PASSWORD",    "{{ ludus_win_privesc_office_sql_password }}")
+      $xml = $xml.Replace("PLACEHOLDER_VEEAM_HOST",      "{{ ludus_win_privesc_internal_veeam_host }}")
+      $xml = $xml.Replace("PLACEHOLDER_VEEAM_USER",      "{{ ludus_win_privesc_office_veeam_user }}")
+      $xml = $xml.Replace("PLACEHOLDER_VEEAM_PASSWORD",  "{{ ludus_win_privesc_office_veeam_password }}")
+
+      $stream = $entry.Open()
+      $stream.SetLength(0)
+      $writer = New-Object System.IO.StreamWriter($stream, [System.Text.Encoding]::UTF8)
+      $writer.Write($xml)
+      $writer.Flush()
+      $writer.Close()
+
+      Write-Output "PATCHED"
+    } finally {
+      $zip.Dispose()
+    }
 
 - name: Create Excel-like CSV with .xlsx extension (readable by Excel, no install needed)
   ansible.windows.win_copy:
     content: |
       Bereich,System,Benutzer,Passwort,Bemerkung
-      Windows,WIN2022.lab.local,Administrator,{{ ludus_win_privesc_admin_password }},PrivEsc Lab
-      Windows,DC01.lab.local,Administrator,DC@dmin2024!,Domain Controller
-      Datenbank,db.lab.local,sa,Sql$Admin2024!,SQL Server SA
-      Backup,veeam.lab.local,veeam_svc,V33m@Backup!,Veeam Backup Server
-      Linux,10.10.10.30,root,Tux$ecure2024,Dev Server
-      Netzwerk,router.lab.local,admin,router@lab123,Netzwerk-Router
-      Dienst,wsus.lab.local,svc_wsus,wsus_svc_P@ss!,WSUS Server
-    dest: "C:\\Users\\{{ ludus_win_privesc_victim_user }}\\Desktop\\Passwort-Liste.csv"
+      Windows,{{ ludus_win_privesc_internal_fileserver_host }},{{ ludus_win_privesc_office_admin_user }},{{ ludus_win_privesc_office_admin_password }},Fileserver
+      Windows,{{ ludus_win_privesc_internal_dc_host }},{{ ludus_win_privesc_office_dc_user }},{{ ludus_win_privesc_office_dc_password }},Domain Controller
+      Datenbank,{{ ludus_win_privesc_internal_db_host }},sa,{{ ludus_win_privesc_office_sql_password }},SQL Server SA
+      Backup,{{ ludus_win_privesc_internal_veeam_host }},{{ ludus_win_privesc_office_veeam_user }},{{ ludus_win_privesc_office_veeam_password }},Veeam Backup Server
+      Linux,{{ ludus_win_privesc_internal_linux_ip }},{{ ludus_win_privesc_office_linux_user }},{{ ludus_win_privesc_office_linux_password }},Dev Server
+      Netzwerk,router.{{ ludus_win_privesc_internal_domain_fqdn }},admin,{{ ludus_win_privesc_office_router_password }},Netzwerk-Router
+      Dienst,wsus.{{ ludus_win_privesc_internal_domain_fqdn }},{{ ludus_win_privesc_office_wsus_user }},{{ ludus_win_privesc_office_wsus_password }},WSUS Server
+    dest: "{{ ludus_win_privesc_victim_profile }}\\Desktop\\Passwort-Liste.csv"
 
 - name: Validate credential documents exist in expected locations
   ansible.windows.win_shell: |
     $files = @(
-      "C:\Users\{{ ludus_win_privesc_victim_user }}\Desktop\Passwoerter.txt",
+      "{{ ludus_win_privesc_victim_profile }}\Desktop\Passwoerter.txt",
       "C:\IT\IT-Server-Credentials.txt",
       "C:\IT\Server-Zugangsdaten.docx",
       "C:\Users\Public\Documents\passwords_export.csv",
       "C:\Users\Public\Documents\IT-Notizen.txt",
-      "C:\Users\{{ ludus_win_privesc_victim_user }}\Desktop\Passwort-Liste.csv"
+      "{{ ludus_win_privesc_victim_profile }}\Desktop\Passwort-Liste.csv"
     )
     $missing = $files | Where-Object { -not (Test-Path $_) }
     if ($missing) {
@@ -222,14 +253,72 @@
     msg:
       - "=== Office Documents with Embedded Credentials Scenario ==="
       - "Files deployed:"
-      - "  C:\\Users\\{{ ludus_win_privesc_victim_user }}\\Desktop\\Passwoerter.txt"
-      - "  C:\\Users\\{{ ludus_win_privesc_victim_user }}\\Desktop\\Passwort-Liste.csv"
+      - "  {{ ludus_win_privesc_victim_profile }}\\Desktop\\Passwoerter.txt"
+      - "  {{ ludus_win_privesc_victim_profile }}\\Desktop\\Passwort-Liste.csv"
       - "  C:\\IT\\IT-Server-Credentials.txt        (Everyone:R)"
       - "  C:\\IT\\Server-Zugangsdaten.docx          (Everyone:R, Open XML)"
       - "  C:\\Users\\Public\\Documents\\passwords_export.csv"
       - "  C:\\Users\\Public\\Documents\\IT-Notizen.txt"
       - "Enumerate (als lowpriv):"
       - "  findstr /si \"password passwort kennwort\" C:\\*.txt C:\\IT\\*.* C:\\Users\\Public\\**"
-      - "  dir /s /b C:\\IT C:\\Users\\Public\\Documents C:\\Users\\{{ ludus_win_privesc_victim_user }}\\Desktop"
+      - "  dir /s /b C:\\IT C:\\Users\\Public\\Documents {{ ludus_win_privesc_victim_profile }}\\Desktop"
       - '  Get-ChildItem -Recurse C:\ -Include *.txt,*.csv,*.docx,*.xlsx 2>$null |'
       - "    Select-String -Pattern 'password|passwort|kennwort' -CaseSensitive:$false" 
+
+- name: Create random subfolder in Administrator Documents with credential config files
+  ansible.windows.win_shell: |
+    $adj  = @("backup","old","legacy","temp","archive","config","setup","install","deploy","migration")
+    $noun = @("settings","config","data","files","scripts","tools","admin","server","infra","system")
+    $folder   = "$($adj | Get-Random)_$($noun | Get-Random)"
+    $base     = "C:\Users\{{ ludus_win_privesc_office_admin_user }}\Documents\$folder"
+    New-Item -ItemType Directory -Force -Path $base | Out-Null
+
+    # config.ini — plaintext credentials
+    $ini = @()
+    $ini += "[Database]"
+    $ini += "Server={{ ludus_win_privesc_internal_db_host }}"
+    $ini += "Port={{ ludus_win_privesc_internal_db_port }}"
+    $ini += "Username=sa"
+    $ini += "Password={{ ludus_win_privesc_office_admin_password }}"
+    $ini += ""
+    $ini += "[Application]"
+    $ini += "AdminUser={{ ludus_win_privesc_office_admin_user }}"
+    $ini += "AdminPassword={{ ludus_win_privesc_office_admin_password }}"
+    $ini += "Environment=Production"
+    $ini | Set-Content "$base\config.ini" -Encoding UTF8
+
+    # connection.xml — database connection strings with credentials
+    $xml = @()
+    $xml += '<?xml version="1.0" encoding="utf-8"?>'
+    $xml += '<configuration>'
+    $xml += '  <connectionStrings>'
+    $xml += '    <add name="MainDB" connectionString="Server={{ ludus_win_privesc_internal_db_host }};User Id=sa;Password={{ ludus_win_privesc_office_admin_password }};" />'
+    $xml += '    <add name="AdminDB" connectionString="Server={{ ludus_win_privesc_internal_db_host }};User Id={{ ludus_win_privesc_office_admin_user }};Password={{ ludus_win_privesc_office_admin_password }};" />'
+    $xml += '  </connectionStrings>'
+    $xml += '  <appSettings>'
+    $xml += '    <add key="AdminUser" value="{{ ludus_win_privesc_office_admin_user }}" />'
+    $xml += '    <add key="AdminPass" value="{{ ludus_win_privesc_office_admin_password }}" />'
+    $xml += '  </appSettings>'
+    $xml += '</configuration>'
+    $xml | Set-Content "$base\connection.xml" -Encoding UTF8
+
+    # deploy.ps1 — script with hardcoded credentials
+    $ps1 = @()
+    $ps1 += "# Deployment script"
+    $ps1 += "`$adminUser = '{{ ludus_win_privesc_office_admin_user }}'"
+    $ps1 += "`$adminPass = '{{ ludus_win_privesc_office_admin_password }}'"
+    $ps1 += "`$secPass   = ConvertTo-SecureString `$adminPass -AsPlainText -Force"
+    $ps1 += "`$cred      = New-Object System.Management.Automation.PSCredential(`$adminUser, `$secPass)"
+    $ps1 += "Invoke-Command -ComputerName {{ ludus_win_privesc_internal_dc_host }} -Credential `$cred -ScriptBlock { whoami }"
+    $ps1 | Set-Content "$base\deploy.ps1" -Encoding UTF8
+
+    # Grant victim read access for discovery
+    cmd /c icacls "$base" /grant "{{ ludus_win_privesc_victim_user }}:(OI)(CI)R" | Out-Null
+
+    Write-Output "CREATED: $base"
+  register: _admin_docs_result
+  failed_when: "'CREATED' not in _admin_docs_result.stdout"
+
+- name: Show admin docs credential folder
+  ansible.builtin.debug:
+    msg: "{{ _admin_docs_result.stdout | trim }}"

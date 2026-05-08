@@ -13,8 +13,8 @@
     type: String
     state: present
   loop:
-    - { name: "DefaultUserName",   data: "{{ ludus_win_privesc_admin_user }}" }
-    - { name: "DefaultPassword",   data: "{{ ludus_win_privesc_admin_password }}" }
+    - { name: "DefaultUserName",   data: "{{ ludus_win_privesc_winlogon_user }}" }
+    - { name: "DefaultPassword",   data: "{{ ludus_win_privesc_winlogon_password }}" }
     - { name: "DefaultDomainName", data: "." }
     - { name: "AutoAdminLogon",    data: "1" }
 

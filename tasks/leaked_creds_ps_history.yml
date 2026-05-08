@@ -8,13 +8,13 @@
 - name: Create PSReadLine history directory for victim user
   ansible.windows.win_shell: |
     if ("{{ ludus_win_privesc_victim_user_type }}" -eq "domain") {
-      $profileBase = "C:\Users\{{ ludus_win_privesc_victim_user }}"
+      $profileBase = "{{ ludus_win_privesc_victim_profile }}"
       # Domain profiles may not exist until first logon; create it
       if (-not (Test-Path $profileBase)) {
         New-Item -ItemType Directory -Force -Path $profileBase | Out-Null
       }
     } else {
-      $profileBase = "C:\Users\{{ ludus_win_privesc_victim_user }}"
+      $profileBase = "{{ ludus_win_privesc_victim_profile }}"
     }
     $histDir = "$profileBase\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine"
     New-Item -ItemType Directory -Force -Path $histDir | Out-Null
@@ -24,15 +24,15 @@
     content: |
       Get-ChildItem C:\
       net user
-      $pass = ConvertTo-SecureString "{{ ludus_win_privesc_admin_password }}" -AsPlainText -Force
-      $cred = New-Object System.Management.Automation.PSCredential("{{ ludus_win_privesc_admin_user }}", $pass)
+      $pass = ConvertTo-SecureString "{{ ludus_win_privesc_ps_history_password }}" -AsPlainText -Force
+      $cred = New-Object System.Management.Automation.PSCredential("{{ ludus_win_privesc_ps_history_user }}", $pass)
       Invoke-Command -ComputerName localhost -Credential $cred -ScriptBlock { whoami }
-      net use Z: \\fileserver\share /user:{{ ludus_win_privesc_admin_user }} {{ ludus_win_privesc_admin_password }}
+      net use Z: \\{{ ludus_win_privesc_internal_fileserver_host }}\{{ ludus_win_privesc_internal_fileserver_share }} /user:{{ ludus_win_privesc_ps_history_user }} {{ ludus_win_privesc_ps_history_password }}
       Get-Process
-    dest: "C:\\Users\\{{ ludus_win_privesc_victim_user }}\\AppData\\Roaming\\Microsoft\\Windows\\PowerShell\\PSReadLine\\ConsoleHost_history.txt"
+    dest: "{{ ludus_win_privesc_victim_profile }}\\AppData\\Roaming\\Microsoft\\Windows\\PowerShell\\PSReadLine\\ConsoleHost_history.txt"
 - name: Print PS History scenario info
   ansible.builtin.debug:
     msg:
       - "=== Leaked Credentials in PowerShell History Scenario ==="
-      - "History file: C:\\Users\\{{ ludus_win_privesc_victim_user }}\\AppData\\Roaming\\Microsoft\\Windows\\PowerShell\\PSReadLine\\ConsoleHost_history.txt"
+      - "History file: {{ ludus_win_privesc_victim_profile }}\\AppData\\Roaming\\Microsoft\\Windows\\PowerShell\\PSReadLine\\ConsoleHost_history.txt"
       - "Enumerate: type $env:APPDATA\\Microsoft\\Windows\\PowerShell\\PSReadLine\\ConsoleHost_history.txt"

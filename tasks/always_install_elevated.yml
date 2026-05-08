@@ -18,10 +18,16 @@
     # Load the victim user's hive and set the key
     if ("{{ ludus_win_privesc_victim_user_type }}" -eq "domain") {
       $userSid = (New-Object System.Security.Principal.NTAccount("{{ ludus_win_privesc_domain | default("") }}\{{ ludus_win_privesc_victim_user }}")).Translate([System.Security.Principal.SecurityIdentifier]).Value
-      $ntuser  = "C:\Users\{{ ludus_win_privesc_victim_user }}\NTUSER.DAT"
+      $ntuser  = "$env:SystemDrive\Users\{{ ludus_win_privesc_victim_user }}\NTUSER.DAT"
+      # Try resolved profile path first
+      $resolved = "{{ ludus_win_privesc_victim_profile }}\NTUSER.DAT"
+      if (Test-Path $resolved) { $ntuser = $resolved }
     } else {
       $userSid = (Get-LocalUser -Name "{{ ludus_win_privesc_victim_user }}").SID.Value
-      $ntuser  = "C:\Users\{{ ludus_win_privesc_victim_user }}\NTUSER.DAT"
+      $ntuser  = "$env:SystemDrive\Users\{{ ludus_win_privesc_victim_user }}\NTUSER.DAT"
+      # Try resolved profile path first
+      $resolved = "{{ ludus_win_privesc_victim_profile }}\NTUSER.DAT"
+      if (Test-Path $resolved) { $ntuser = $resolved }
     }
     reg load HKU\$userSid $ntuser 2>$null | Out-Null
     reg add "HKU\$userSid\SOFTWARE\Policies\Microsoft\Windows\Installer" /v AlwaysInstallElevated /t REG_DWORD /d 1 /f | Out-Null
@@ -29,6 +35,50 @@
 
     # Also set under current HKCU so it's active for the current session
     reg add "HKCU\SOFTWARE\Policies\Microsoft\Windows\Installer" /v AlwaysInstallElevated /t REG_DWORD /d 1 /f | Out-Null
+
+- name: Validate AlwaysInstallElevated is set in HKLM
+  ansible.windows.win_reg_stat:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer
+    name: AlwaysInstallElevated
+  register: _aie_hklm
+  tags: validate
+
+- name: Validate AlwaysInstallElevated is set in HKCU for victim user
+  ansible.windows.win_shell: |
+    if ("{{ ludus_win_privesc_victim_user_type }}" -eq "domain") {
+      $sid = (New-Object System.Security.Principal.NTAccount(
+        "{{ ludus_win_privesc_domain | default('') }}\{{ ludus_win_privesc_victim_user }}"
+      )).Translate([System.Security.Principal.SecurityIdentifier]).Value
+    } else {
+      $sid = (Get-LocalUser -Name "{{ ludus_win_privesc_victim_user }}").SID.Value
+    }
+    # Try mounted hive first (user logged in)
+    $regPath = "HKU:\$sid\SOFTWARE\Policies\Microsoft\Windows\Installer"
+    $val = (Get-ItemProperty -Path $regPath -Name AlwaysInstallElevated -ErrorAction SilentlyContinue).AlwaysInstallElevated
+    if ($val -eq 1) { Write-Output "OK"; exit 0 }
+    # Fallback: use reg query directly on NTUSER.DAT (avoids PS provider timing issue)
+    $ntuser = "{{ ludus_win_privesc_victim_profile }}\NTUSER.DAT"
+    if (Test-Path $ntuser) {
+      reg load "HKU\validate_$sid" $ntuser 2>$null | Out-Null
+      Start-Sleep -Seconds 1
+      $result = reg query "HKU\validate_$sid\SOFTWARE\Policies\Microsoft\Windows\Installer" /v AlwaysInstallElevated 2>$null
+      reg unload "HKU\validate_$sid" 2>$null | Out-Null
+      if ($result -match "0x1") { Write-Output "OK"; exit 0 }
+    }
+    Write-Output "FAIL"
+  register: _aie_hkcu
+  tags: validate
+
+- name: Assert AlwaysInstallElevated is configured correctly
+  ansible.builtin.fail:
+    msg: >
+      AlwaysInstallElevated scenario validation failed —
+      HKLM={{ _aie_hklm.value | default('missing') }}
+      HKCU={{ _aie_hkcu.stdout | trim }}
+  when: >
+    not _aie_hklm.exists or _aie_hklm.value != 1 or
+    _aie_hkcu.stdout | trim != "OK"
+  tags: validate
 
 - name: Print AlwaysInstallElevated scenario info
   ansible.builtin.debug:

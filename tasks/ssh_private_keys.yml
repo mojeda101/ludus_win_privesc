@@ -27,7 +27,7 @@
 
 - name: Create .ssh directory for victim user
   ansible.windows.win_file:
-    path: "C:\\Users\\{{ ludus_win_privesc_victim_user }}\\.ssh"
+    path: "{{ ludus_win_privesc_victim_profile }}\\.ssh"
     state: directory
 
 - name: Drop unprotected RSA private key for victim user
@@ -40,13 +40,13 @@
       Q0uAAAAEA8yNgcn5iFqfN8MXPpW9x4kJRzVfpYbNqXw7T2uNY2VjWsxoUcyXkr2Y0yx
       PCbq1MGpc80YiodE1lKwqk9DS4AAAARbG93cHJpdkBsYWIubG9jYWw=
       -----END OPENSSH PRIVATE KEY-----
-    dest: "C:\\Users\\{{ ludus_win_privesc_victim_user }}\\.ssh\\id_ed25519"
+    dest: "{{ ludus_win_privesc_victim_profile }}\\.ssh\\id_ed25519"
 
 - name: Drop matching public key for victim user
   ansible.windows.win_copy:
     content: |
       ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFjasx oUcyXkr2Y0yxPCbq1MGpc80YiodE1lKwqk9DS4 lowpriv@lab.local
-    dest: "C:\\Users\\{{ ludus_win_privesc_victim_user }}\\.ssh\\id_ed25519.pub"
+    dest: "{{ ludus_win_privesc_victim_profile }}\\.ssh\\id_ed25519.pub"
 
 - name: Drop unprotected RSA private key for victim user (second key — common find)
   ansible.windows.win_copy:
@@ -57,31 +57,32 @@
       i2bO0xBDhQ9bLoMXZFkQ5pWjWfhHKV2lQfP3DVL5RWkAAo3KFOhS5IjFCKxFT5S
       MIILab+ExampleRSAKeyForPrivEscLab+AAAA==
       -----END RSA PRIVATE KEY-----
-    dest: "C:\\Users\\{{ ludus_win_privesc_victim_user }}\\.ssh\\id_rsa"
+    dest: "{{ ludus_win_privesc_victim_profile }}\\.ssh\\id_rsa"
 
 - name: Drop RSA public key for victim user
   ansible.windows.win_copy:
     content: |
       ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDZravRoUBQvMc9l7lEmv08wacUNNkoYIwXEaYZVM4QaoyeWiyd8e8IKQcA7GrQggFUEnkfSYUGo5gwFPkMRZCFvs4wUE0zylN2QcZs8dloc4jvWqLZs7TEEOF D1sugxdkWRDmlaVZ+EcpXaVB8/cNUvlFaQACjcoU6FLkiMUIrEVPlIw== lowpriv@lab.local
-    dest: "C:\\Users\\{{ ludus_win_privesc_victim_user }}\\.ssh\\id_rsa.pub"
+    dest: "{{ ludus_win_privesc_victim_profile }}\\.ssh\\id_rsa.pub"
 
 - name: Drop known_hosts revealing internal network topology
   ansible.windows.win_copy:
     content: |
       # SSH known_hosts — reveals internal hosts and their keys
-      dc01.lab.local,10.10.10.10 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC7...
-      fileserver.lab.local,10.10.10.20 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
-      linuxdev.lab.local,10.10.10.30 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTIt...
-      10.10.10.10 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC7...
-      10.10.10.20 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
-    dest: "C:\\Users\\{{ ludus_win_privesc_victim_user }}\\.ssh\\known_hosts"
+      {{ ludus_win_privesc_internal_dc_host }},{{ ludus_win_privesc_internal_dc_ip }} ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC7...
+      {{ ludus_win_privesc_internal_fileserver_host }},{{ ludus_win_privesc_internal_fileserver_ip }} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
+      {{ ludus_win_privesc_internal_linux_host }},{{ ludus_win_privesc_internal_linux_ip }} ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTIt...
+      {{ ludus_win_privesc_internal_veeam_host }},{{ ludus_win_privesc_internal_veeam_ip }} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
+      {{ ludus_win_privesc_internal_dc_ip }} ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC7...
+      {{ ludus_win_privesc_internal_fileserver_ip }} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
+    dest: "{{ ludus_win_privesc_victim_profile }}\\.ssh\\known_hosts"
 
 - name: Set insecure permissions on victim .ssh directory (Everyone readable)
   ansible.windows.win_shell: |
     # Intentionally weak ACL — any local user can read the private keys
-    icacls "C:\Users\{{ ludus_win_privesc_victim_user }}\.ssh" /grant Everyone:R /T | Out-Null
-    icacls "C:\Users\{{ ludus_win_privesc_victim_user }}\.ssh\id_ed25519" /grant Everyone:R | Out-Null
-    icacls "C:\Users\{{ ludus_win_privesc_victim_user }}\.ssh\id_rsa" /grant Everyone:R | Out-Null
+    icacls "{{ ludus_win_privesc_victim_profile }}\.ssh" /grant Everyone:R /T | Out-Null
+    icacls "{{ ludus_win_privesc_victim_profile }}\.ssh\id_ed25519" /grant Everyone:R | Out-Null
+    icacls "{{ ludus_win_privesc_victim_profile }}\.ssh\id_rsa" /grant Everyone:R | Out-Null
 
 - name: Create .ssh directory for Administrator (high-value target)
   ansible.windows.win_file:
@@ -115,29 +116,35 @@
     content: |
       # SSH config — reveals hostnames, users, and key paths
       Host jumpbox
-          HostName 10.10.10.1
+          HostName {{ ludus_win_privesc_internal_jumpbox_ip }}
           User administrator
           IdentityFile C:\Temp\backup_jumpbox_key
           StrictHostKeyChecking no
 
       Host dc01
-          HostName dc01.lab.local
+          HostName {{ ludus_win_privesc_internal_dc_host }}
           User administrator
-          IdentityFile C:\Users\lowpriv\.ssh\id_rsa
+          IdentityFile C:\Users\{{ ludus_win_privesc_victim_user }}\.ssh\id_rsa
+          StrictHostKeyChecking no
+
+      Host veeamrepo
+          HostName {{ ludus_win_privesc_internal_veeam_host }}
+          User {{ ludus_win_privesc_office_veeam_user }}
+          IdentityFile C:\Users\{{ ludus_win_privesc_victim_user }}\.ssh\id_ed25519
           StrictHostKeyChecking no
 
       Host linuxdev
-          HostName 10.10.10.30
-          User root
-          IdentityFile C:\Users\lowpriv\.ssh\id_ed25519
+          HostName {{ ludus_win_privesc_internal_linux_ip }}
+          User {{ ludus_win_privesc_office_linux_user }}
+          IdentityFile C:\Users\{{ ludus_win_privesc_victim_user }}\.ssh\id_ed25519
           StrictHostKeyChecking no
-    dest: "C:\\Users\\{{ ludus_win_privesc_victim_user }}\\.ssh\\config"
+    dest: "{{ ludus_win_privesc_victim_profile }}\\.ssh\\config"
 
 - name: Validate SSH private key files exist and are world-readable
   ansible.windows.win_shell: |
     $keys = @(
-      "C:\Users\{{ ludus_win_privesc_victim_user }}\.ssh\id_ed25519",
-      "C:\Users\{{ ludus_win_privesc_victim_user }}\.ssh\id_rsa",
+      "{{ ludus_win_privesc_victim_profile }}\.ssh\id_ed25519",
+      "{{ ludus_win_privesc_victim_profile }}\.ssh\id_rsa",
       "C:\Temp\backup_jumpbox_key"
     )
     $missing = $keys | Where-Object { -not (Test-Path $_) }
@@ -145,7 +152,7 @@
       Write-Output "FAIL: missing $($missing -join ', ')"
     } else {
       # Check Everyone readable on at least one key
-      $acl = (Get-Acl "C:\Users\{{ ludus_win_privesc_victim_user }}\.ssh\id_rsa").Access |
+      $acl = (Get-Acl "{{ ludus_win_privesc_victim_profile }}\.ssh\id_rsa").Access |
              Where-Object { $_.IdentityReference -like "*Everyone*" }
       if ($acl) { Write-Output "OK" } else { Write-Output "FAIL: ACL not world-readable" }
     }
@@ -164,14 +171,15 @@
     msg:
       - "=== SSH Private Key Discovery Scenario ==="
       - "Keys planted:"
-      - "  C:\\Users\\{{ ludus_win_privesc_victim_user }}\\.ssh\\id_ed25519  (Everyone:R)"
-      - "  C:\\Users\\{{ ludus_win_privesc_victim_user }}\\.ssh\\id_rsa      (Everyone:R)"
+      - "  {{ ludus_win_privesc_victim_profile }}\\.ssh\\id_ed25519  (Everyone:R)"
+      - "  {{ ludus_win_privesc_victim_profile }}\\.ssh\\id_rsa      (Everyone:R)"
       - "  C:\\Temp\\backup_jumpbox_key                    (Everyone:R)"
-      - "  C:\\Users\\{{ ludus_win_privesc_victim_user }}\\.ssh\\config      (reveals targets)"
-      - "  C:\\Users\\{{ ludus_win_privesc_victim_user }}\\.ssh\\known_hosts (reveals topology)"
+      - "  {{ ludus_win_privesc_victim_profile }}\\.ssh\\config      (reveals targets)"
+      - "  {{ ludus_win_privesc_victim_profile }}\\.ssh\\known_hosts (reveals topology)"
       - "Admin authorized_keys accepts lowpriv key — pivot to Administrator via SSH."
       - "Enumerate: dir /s /b C:\\Users\\.ssh 2>nul"
       - "           dir /s /b C:\\ProgramData\\.ssh 2>nul"
       - "           dir C:\\Temp\\*key* 2>nul"
       - "Exploit:   ssh -i id_rsa {{ ludus_win_privesc_admin_user }}@localhost"
-      - "           ssh -i id_ed25519 root@10.10.10.30"
+      - "           ssh -i id_ed25519 {{ ludus_win_privesc_office_linux_user }}@{{ ludus_win_privesc_internal_linux_ip }}"
+      - "           ssh -i id_ed25519 {{ ludus_win_privesc_office_veeam_user }}@{{ ludus_win_privesc_internal_veeam_host }}"

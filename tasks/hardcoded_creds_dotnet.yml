@@ -4,6 +4,14 @@
 # hardcoded Administrator credentials in plaintext.
 # The victim can discover credentials via dnSpy / strings / Reflector.
 #
+# NOTE: Unlike the other credential-discovery scenarios in this role, the
+# credentials in this scenario are baked INTO THE PRE-COMPILED BINARY.
+# They cannot be customized via role variables. The exposed credentials
+# (visible via `strings` or dnSpy on CustomDotNetApp.exe) are the upstream
+# cookbook's defaults and do NOT correspond to any real account in your
+# range. Use this scenario for "find the hardcoded creds" training value
+# only; do not expect the recovered creds to authenticate anywhere.
+#
 # Reference: https://github.com/nickvourd/Windows-Local-Privilege-Escalation-Cookbook/blob/master/Notes/LeakedCredentialsHardcodedCredentials.md
 
 - name: Create directory for hardcoded creds service
